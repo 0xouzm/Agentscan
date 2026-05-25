@@ -36,6 +36,29 @@ function learningTop(scan: BnbAgentScanResponse | null) {
   return rows.sort((a, b) => b[1] - a[1]).slice(0, 5)
 }
 
+const ROW_HINTS: Record<string, string> = {
+  'BNB quality agents': 'BNB agents in the local Agentscan index with enough metadata quality to be useful for discovery.',
+  'BNB reputation agents': 'BNB agents in the local Agentscan index that have reputation records.',
+  'Unique owners': 'Distinct owner addresses behind the indexed BNB agents.',
+  'Agentscan sync': 'Latest local ERC-8004 sync status and block for BNB Smart Chain.',
+  'NfaSCAN health': 'NfaSCAN crawler health and sync mode reported by the public BAP-578 index.',
+  'NfaSCAN latest block': 'Most recent BNB block timestamp observed by NfaSCAN.',
+}
+
+const MINI_HINTS: Record<string, string> = {
+  'Merkle learning': 'BAP-578 NFAs that publish Merkle learning proof data.',
+  'JSON light': 'BAP-578 NFAs using the lighter JSON learning metadata mode.',
+  'Indexed contracts': 'BAP-578 contracts indexed by NfaSCAN.',
+  'Mint fee': 'Current NFA mint fee reported by the BAP-578 contract metadata.',
+  jobCounter: 'Current ERC-8183/APEX job counter from the BSC testnet execution contract.',
+  paused: 'Whether the ERC-8183/APEX execution contract is paused.',
+  'testnet block': 'Latest BSC testnet block read while checking execution readiness.',
+  'code bytes': 'Deployed bytecode size at the execution contract address.',
+  'Latest release': 'Latest public BNBAgent SDK release tag from GitHub.',
+  'Open PRs': 'Open pull requests in the public BNBAgent SDK repository.',
+  'Last push': 'Most recent push timestamp for the public BNBAgent SDK repository.',
+}
+
 export default function BnbAgentSection({
   scan,
   loading,
@@ -70,11 +93,6 @@ export default function BnbAgentSection({
             </span>
           </div>
           <h2 className="text-2xl font-bold tracking-tight text-[#0a0a0a] dark:text-[#fafafa]">BNB Agent Stack</h2>
-          <p className="mt-2 max-w-2xl text-[14px] leading-relaxed text-[#525252] dark:text-[#b8b19b]">
-            BNB has three different agent signals that should not be mixed together:
-            ERC-8004 identity on Agentscan, BAP-578/NFA verification on NfaSCAN,
-            and BNBAgent SDK/APEX execution readiness on BSC testnet.
-          </p>
         </div>
         <div className="flex flex-wrap gap-2 text-[11px] font-medium">
           {BNB_AGENT_OFFICIAL_LINKS.map((link) => <ExternalButton key={link.href} {...link} />)}
@@ -142,13 +160,9 @@ export default function BnbAgentSection({
         </div>
 
         <div className="rounded-2xl border border-[#f4e7aa] bg-white p-5 dark:border-[#30270e] dark:bg-[#17140a]">
-          <h3 className="text-sm font-semibold text-[#0a0a0a] dark:text-[#fafafa]">
+          <h3 title="BAP-578 turns an AI agent into a Non-Fungible Agent that can carry ownership, ERC-8004 identity, and learning proof data." className="text-sm font-semibold text-[#0a0a0a] dark:text-[#fafafa]">
             BAP-578 Verification
           </h3>
-          <p className="mt-2 text-[12px] leading-relaxed text-[#525252] dark:text-[#b8b19b]">
-            BAP-578 turns an AI agent into a Non-Fungible Agent: a tradeable,
-            ownable contract asset that can carry ERC-8004 identity and learning proofs.
-          </p>
           <div className="mt-4 grid grid-cols-2 gap-3 text-[12px]">
             <MiniStat label="Merkle learning" value={formatInt(nfascan?.bap578.merkleLearningAgents)} />
             <MiniStat label="JSON light" value={formatInt(nfascan?.bap578.jsonLightAgents)} />
@@ -198,22 +212,20 @@ export default function BnbAgentSection({
 
 function MetricCard({ label, value, hint, loading }: { label: string; value: string; hint: string; loading: boolean }) {
   return (
-    <div className="rounded-2xl border border-[#f4e7aa] bg-white p-5 dark:border-[#30270e] dark:bg-[#17140a]">
+    <div title={hint} className="rounded-2xl border border-[#f4e7aa] bg-white p-5 dark:border-[#30270e] dark:bg-[#17140a]">
       <div className="text-[11px] font-medium uppercase tracking-[0.16em] text-[#8a6a00] dark:text-[#d8b43a]">{label}</div>
       <div className="mt-2 text-2xl font-semibold tracking-tight text-[#0a0a0a] dark:text-[#fafafa]">
         {loading ? <div className="h-7 w-24 animate-pulse rounded bg-[#f5e8aa] dark:bg-[#30270e]" /> : value}
       </div>
-      <div className="mt-1.5 text-[11px] text-[#737373] dark:text-[#928b76]">{hint}</div>
     </div>
   )
 }
 
 function LayerCard({ title, status, body }: { title: string; status: string; body: string }) {
   return (
-    <div className="rounded-2xl border border-[#f4e7aa] bg-white p-5 dark:border-[#30270e] dark:bg-[#17140a]">
+    <div title={body} className="rounded-2xl border border-[#f4e7aa] bg-white p-5 dark:border-[#30270e] dark:bg-[#17140a]">
       <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-[#a47a00] dark:text-[#f0b90b]">{status.replaceAll('_', ' ')}</div>
       <h3 className="mt-2 text-sm font-semibold text-[#0a0a0a] dark:text-[#fafafa]">{title}</h3>
-      <p className="mt-2 text-[12px] leading-relaxed text-[#525252] dark:text-[#b8b19b]">{body}</p>
     </div>
   )
 }
@@ -222,11 +234,9 @@ function ExecutionPanel({ scan, loading }: { scan: BnbAgentScanResponse | null; 
   const execution = scan?.execution
   return (
     <div className="rounded-2xl border border-[#f4e7aa] bg-white p-5 dark:border-[#30270e] dark:bg-[#17140a]">
-      <h3 className="text-sm font-semibold text-[#0a0a0a] dark:text-[#fafafa]">Execution Readiness</h3>
-      <p className="mt-2 text-[12px] leading-relaxed text-[#525252] dark:text-[#b8b19b]">
-        ERC-8183/APEX is active on BSC testnet, but the default contract has no
-        completed job volume yet. Treat this as infrastructure readiness, not mature usage.
-      </p>
+      <h3 title="ERC-8183/APEX readiness is testnet infrastructure telemetry, not mature completed-job volume." className="text-sm font-semibold text-[#0a0a0a] dark:text-[#fafafa]">
+        Execution Readiness
+      </h3>
       <div className="mt-4 grid grid-cols-2 gap-3 text-[12px]">
         <MiniStat label="jobCounter" value={loading ? '--' : formatInt(execution?.job_counter)} />
         <MiniStat label="paused" value={execution?.paused == null ? '--' : String(execution.paused)} />
@@ -270,11 +280,11 @@ function RecentEvents({ rows, loading }: { rows: BnbAgentEvent[]; loading: boole
 }
 
 function InfoRow({ label, value }: { label: string; value: string }) {
-  return <tr><td className="px-4 py-3 text-[#737373]">{label}</td><td className="px-4 py-3 text-right font-mono text-[#0a0a0a] dark:text-[#fafafa]">{value}</td></tr>
+  return <tr title={ROW_HINTS[label] ?? label}><td className="px-4 py-3 text-[#737373]">{label}</td><td className="px-4 py-3 text-right font-mono text-[#0a0a0a] dark:text-[#fafafa]">{value}</td></tr>
 }
 
 function MiniStat({ label, value }: { label: string; value: string }) {
-  return <div><div className="text-[10px] uppercase tracking-[0.14em] text-[#a47a00] dark:text-[#f0b90b]">{label}</div><div className="mt-1 break-words font-mono text-[13px] text-[#0a0a0a] dark:text-[#fafafa]">{value}</div></div>
+  return <div title={MINI_HINTS[label] ?? label}><div className="text-[10px] uppercase tracking-[0.14em] text-[#a47a00] dark:text-[#f0b90b]">{label}</div><div className="mt-1 break-words font-mono text-[13px] text-[#0a0a0a] dark:text-[#fafafa]">{value}</div></div>
 }
 
 function TableTitle({ title }: { title: string }) {

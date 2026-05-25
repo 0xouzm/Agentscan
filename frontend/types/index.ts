@@ -370,6 +370,89 @@ export interface BnbAgentPullRequest {
   url: string;
 }
 
+export interface X402ScanResponse {
+  source: Record<string, string>;
+  fetched_at: number;
+  cache_ttl_seconds: number;
+  official_stats: {
+    window: string;
+    transactions?: X402Stat;
+    volume?: X402Stat;
+    buyers?: X402Stat;
+    sellers?: X402Stat;
+  };
+  official_ecosystem: {
+    premier_members: number;
+    general_members: number;
+    foundation_members: number;
+    integration_count: number;
+    category_breakdown: X402Count[];
+  };
+  discovery: {
+    status: string;
+    total_resources: number | null;
+    sampled_resources: number;
+    priced_resources: number;
+    x402_version: number | null;
+    networks: X402Count[];
+    schemes: X402Count[];
+    assets: X402Count[];
+    price_distribution: X402PriceBucket[];
+    recent_resources: X402Resource[];
+  };
+  agentscan: {
+    coinbase_linked_agents: number;
+    x402_capability_agents: number;
+    agentkit_capability_agents: number;
+    payable_capability_agents: number;
+  };
+  maturity: Record<string, { status: string; evidence: string }>;
+  history: X402HistoryPoint[];
+}
+
+export interface X402Stat {
+  display: string;
+  value: number | null;
+}
+
+export interface X402Count {
+  name: string;
+  count: number;
+}
+
+export interface X402PriceBucket {
+  bucket: string;
+  count: number;
+  min_usd: number;
+  max_usd: number | null;
+}
+
+export interface X402Resource {
+  resource: string;
+  host: string;
+  description: string | null;
+  method: string | null;
+  accepts_count: number;
+  networks: string[];
+  min_price_usd: number | null;
+}
+
+export interface X402HistoryPoint {
+  snapshot_time: string;
+  transactions_30d: number | null;
+  volume_30d: number | null;
+  buyers_30d: number | null;
+  sellers_30d: number | null;
+  total_resources: number | null;
+  sampled_resources: number | null;
+  priced_resources: number | null;
+  base_resources: number | null;
+  x402_capability_agents: number | null;
+  agentkit_capability_agents: number | null;
+  payable_capability_agents: number | null;
+  discovery_status: string | null;
+}
+
 // Trending Agents Response (for homepage)
 export interface TrendingAgentsResponse {
   top_ranked: Agent[];

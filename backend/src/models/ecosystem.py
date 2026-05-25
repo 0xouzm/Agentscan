@@ -9,6 +9,7 @@ from sqlalchemy import (
     DateTime,
     Float,
     ForeignKey,
+    Integer,
     JSON,
     String,
     Text,
@@ -84,3 +85,25 @@ class IngestionRun(Base):
     ended_at = Column(DateTime, nullable=True)
     stats_json = Column(JSON, nullable=True)
     error_log = Column(Text, nullable=True)
+
+
+class X402EcosystemSnapshot(Base):
+    """Persisted x402 ecosystem snapshots for trend views."""
+
+    __tablename__ = "x402_ecosystem_snapshots"
+
+    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    snapshot_time = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
+    transactions_30d = Column(Float, nullable=True)
+    volume_30d = Column(Float, nullable=True)
+    buyers_30d = Column(Float, nullable=True)
+    sellers_30d = Column(Float, nullable=True)
+    total_resources = Column(Integer, nullable=True)
+    sampled_resources = Column(Integer, nullable=True)
+    priced_resources = Column(Integer, nullable=True)
+    base_resources = Column(Integer, nullable=True)
+    x402_capability_agents = Column(Integer, nullable=True)
+    agentkit_capability_agents = Column(Integer, nullable=True)
+    payable_capability_agents = Column(Integer, nullable=True)
+    discovery_status = Column(String, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)

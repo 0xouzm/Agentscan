@@ -40,6 +40,7 @@ from src.db.migrate_add_active_field import migrate as migrate_add_active_field
 from src.db.migrate_is_quality import migrate as migrate_is_quality
 from src.db.migrate_activity_indexes import migrate as migrate_activity_indexes
 from src.db.migrate_add_ecosystem_tables import migrate as migrate_add_ecosystem_tables
+from src.db.migrate_add_x402_history import migrate as migrate_add_x402_history
 from src.db.init_networks import init_networks
 
 # Create database tables
@@ -61,6 +62,7 @@ try:
     migrate_is_quality()  # Pre-computed quality flag + composite indexes
     migrate_activity_indexes()  # Indexes on activities table for JOINs/GROUP BYs
     migrate_add_ecosystem_tables()  # Ecosystem and capability tables
+    migrate_add_x402_history()  # x402 ecosystem trend snapshots
 except Exception as e:
     print(f"Migration warning: {e}")
 

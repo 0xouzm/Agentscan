@@ -5,8 +5,9 @@ import Image from 'next/image'
 import { useEffect, useState } from 'react'
 
 import { ecosystemService } from '@/lib/api/services'
-import type { BnbAgentScanResponse, VirtualsAcpScanResponse } from '@/types'
+import type { BnbAgentScanResponse, VirtualsAcpScanResponse, X402ScanResponse } from '@/types'
 import BnbAgentSection from './components/BnbAgentSection'
+import X402Section from './components/X402Section'
 
 const REFRESH_MS = 4 * 60 * 60 * 1000
 
@@ -60,15 +61,17 @@ function parseJobContent(content: string | null): string {
 export default function EcosystemsPageClient() {
   const [scan, setScan] = useState<VirtualsAcpScanResponse | null>(null)
   const [bnbScan, setBnbScan] = useState<BnbAgentScanResponse | null>(null)
+  const [x402Scan, setX402Scan] = useState<X402ScanResponse | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
     let cancelled = false
     const load = async () => {
-      const [acpResult, bnbResult] = await Promise.allSettled([
+      const [acpResult, bnbResult, x402Result] = await Promise.allSettled([
         ecosystemService.getVirtualsAcpScan(10, 10),
         ecosystemService.getBnbAgentScan(6, 4, 5),
+        ecosystemService.getX402Scan(8),
       ])
       if (cancelled) return
 
@@ -84,7 +87,17 @@ export default function EcosystemsPageClient() {
         console.error('Failed to load BNB Agent data:', bnbResult.reason)
       }
 
-      const failed = acpResult.status === 'rejected' || bnbResult.status === 'rejected'
+      if (x402Result.status === 'fulfilled') {
+        setX402Scan(x402Result.value)
+      } else {
+        console.error('Failed to load x402 data:', x402Result.reason)
+      }
+
+      const failed = (
+        acpResult.status === 'rejected'
+        || bnbResult.status === 'rejected'
+        || x402Result.status === 'rejected'
+      )
       setError(failed ? 'Some live ecosystem data failed to refresh.' : null)
       setLoading(false)
     }
@@ -111,30 +124,7 @@ export default function EcosystemsPageClient() {
 
         <BnbAgentSection scan={bnbScan} loading={loading} />
 
-        <div className="mt-12 mb-6 flex items-center gap-3">
-          <div className="h-px flex-1 bg-[#e5e5e5] dark:bg-[#262626]" />
-          <span className="text-[11px] font-medium uppercase tracking-[0.2em] text-[#737373]">
-            On the roadmap
-          </span>
-          <div className="h-px flex-1 bg-[#e5e5e5] dark:bg-[#262626]" />
-        </div>
-
-        <div className="grid gap-6 md:grid-cols-1">
-          <UpcomingTile
-            title="x402 + Coinbase CDP — Machine Payments"
-            logoSrc="/brand-assets/coinbase-wordmark.svg"
-            logoAlt="Coinbase"
-            logoWidth={96}
-            logoHeight={18}
-            badgeClass="bg-[#d1fae5] text-[#065f46] dark:bg-[#15352a] dark:text-[#6ee7b7]"
-            summary="x402 revives HTTP's dormant Payment Required status as the handshake for agent-to-agent commerce: any endpoint can return a signed price quote, the caller pays stablecoin on Base, and the same request replays with proof-of-payment. Paired with Coinbase's CDP AgentKit, it gives agents programmable wallets for autonomous API buying."
-            bullets={[
-              'Who it serves - API providers and autonomous buyers that need micropayments without accounts, subscriptions, or OAuth.',
-              'What we want to measure - count of agents exposing 402-gated endpoints and those with CDP wallet provisioning signatures.',
-              'Why not yet - there is no registry of x402 endpoints; signals live in the agent metadata and HTTP headers, requiring per-agent probing rather than a single feed.',
-            ]}
-          />
-        </div>
+        <X402Section scan={x402Scan} loading={loading} />
       </div>
     </div>
   )
@@ -164,29 +154,6 @@ function VirtualsAcpSection({
           <h2 className="text-2xl font-bold tracking-tight text-[#0a0a0a] dark:text-[#fafafa]">
             Virtuals ACP — Agent Commerce
           </h2>
-          <p className="mt-2 max-w-2xl text-[14px] leading-relaxed text-[#525252] dark:text-[#a3a3a3]">
-            The Agentic Commerce Protocol is the marketplace layer of the agent economy.
-            Agents publish <em>offerings</em> (bridge, swap, alpha calls, content generation, …)
-            with fixed prices, get <em>hired</em> by other agents or humans, and settle in
-            escrow only after the job reaches its completed phase. Every KPI below is a real
-            unit of economic activity — not model calls or impressions.
-          </p>
-          <p className="mt-2 max-w-2xl text-[12px] leading-relaxed text-[#737373]">
-            Data proxied live from{' '}
-            <code className="rounded bg-[#f0f0f0] px-1.5 py-0.5 text-[11px] text-[#0a0a0a] dark:bg-[#262626] dark:text-[#fafafa]">
-              acpx.virtuals.io
-            </code>
-            , cached 4h. Metric definitions follow the{' '}
-            <a
-              href="https://whitepaper.virtuals.io/acp/acp-glossary"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="underline decoration-dotted underline-offset-2"
-            >
-              official ACP glossary
-            </a>
-            .
-          </p>
         </div>
         <div className="flex gap-2 text-[11px] font-medium">
           <a
@@ -252,12 +219,12 @@ function KpiCard({
 }) {
   const positive = delta != null && delta >= 0
   return (
-    <div className="rounded-2xl border border-[#f0f0f0] bg-[#fafafa] p-5 dark:border-[#1f1f1f] dark:bg-[#171717]">
+    <div title={hint} className="rounded-2xl border border-[#f0f0f0] bg-[#fafafa] p-5 dark:border-[#1f1f1f] dark:bg-[#171717]">
       <div className="text-[11px] font-medium uppercase tracking-[0.16em] text-[#737373]">{label}</div>
       <div className="mt-2 text-2xl font-semibold tracking-tight text-[#0a0a0a] dark:text-[#fafafa]">
         {loading ? <div className="h-7 w-24 animate-pulse rounded bg-[#e5e5e5] dark:bg-[#262626]" /> : value}
       </div>
-      <div className="mt-1.5 flex items-center gap-2 text-[11px]">
+      <div className="mt-1.5 text-[11px]">
         {delta == null ? (
           <span className="text-[#a3a3a3]">30D · —</span>
         ) : (
@@ -272,7 +239,6 @@ function KpiCard({
             <span className="ml-1 text-[#a3a3a3]">30D</span>
           </span>
         )}
-        <span className="text-[#a3a3a3]">· {hint}</span>
       </div>
     </div>
   )
@@ -303,11 +269,11 @@ function TopAgentsTable({ scan, loading }: { scan: VirtualsAcpScanResponse | nul
           <thead className="bg-[#fafafa] text-[11px] uppercase tracking-wider text-[#737373] dark:bg-[#171717]">
             <tr>
               <th className="px-4 py-3 font-medium">Agent</th>
-              <th className="px-4 py-3 text-right font-medium">aGDP</th>
-              <th className="hidden px-4 py-3 text-right font-medium md:table-cell">Jobs</th>
-              <th className="hidden px-4 py-3 text-right font-medium md:table-cell">Unique Users</th>
-              <th className="hidden px-4 py-3 text-right font-medium lg:table-cell">Success Rate</th>
-              <th className="hidden px-4 py-3 text-right font-medium lg:table-cell">Last Active</th>
+              <th title="Gross value routed through this agent." className="px-4 py-3 text-right font-medium">aGDP</th>
+              <th title="Completed ACP jobs handled by this agent." className="hidden px-4 py-3 text-right font-medium md:table-cell">Jobs</th>
+              <th title="Distinct wallets that hired this agent." className="hidden px-4 py-3 text-right font-medium md:table-cell">Unique Users</th>
+              <th title="Share of this agent's jobs that completed successfully." className="hidden px-4 py-3 text-right font-medium lg:table-cell">Success Rate</th>
+              <th title="Most recent ACP activity timestamp for this agent." className="hidden px-4 py-3 text-right font-medium lg:table-cell">Last Active</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-[#f0f0f0] bg-white dark:divide-[#1f1f1f] dark:bg-[#121212]">
@@ -403,11 +369,11 @@ function RecentTransactions({ scan, loading }: { scan: VirtualsAcpScanResponse |
         <table className="w-full text-left text-[13px]">
           <thead className="bg-[#fafafa] text-[11px] uppercase tracking-wider text-[#737373] dark:bg-[#171717]">
             <tr>
-              <th className="px-4 py-3 font-medium">Age</th>
-              <th className="px-4 py-3 font-medium">Job</th>
-              <th className="hidden px-4 py-3 font-medium md:table-cell">From</th>
-              <th className="hidden px-4 py-3 font-medium md:table-cell">To</th>
-              <th className="hidden px-4 py-3 font-medium lg:table-cell">Tx</th>
+              <th title="Time since the ACP transaction was observed." className="px-4 py-3 font-medium">Age</th>
+              <th title="ACP job content or parsed job name." className="px-4 py-3 font-medium">Job</th>
+              <th title="Hiring agent or wallet in the ACP interaction." className="hidden px-4 py-3 font-medium md:table-cell">From</th>
+              <th title="Agent hired to perform the job." className="hidden px-4 py-3 font-medium md:table-cell">To</th>
+              <th title="Base transaction hash when available." className="hidden px-4 py-3 font-medium lg:table-cell">Tx</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-[#f0f0f0] bg-white dark:divide-[#1f1f1f] dark:bg-[#121212]">
@@ -486,64 +452,9 @@ function Header() {
             <h1 className="mb-3 text-3xl font-bold tracking-tight text-[#0a0a0a] dark:text-[#fafafa] lg:text-4xl">
               Agent Economy Ecosystems
             </h1>
-            <p className="text-[15px] leading-relaxed text-[#525252] dark:text-[#a3a3a3]">
-              Autonomous agents need three things to transact: a way to advertise services,
-              a way to execute them on-chain, and a way to settle payment without a human.
-              We track the most credible protocol for each — Virtuals ACP for commerce,
-              BNB ERC-8183 for execution, and x402 + Coinbase CDP for payments.
-            </p>
           </div>
         </div>
       </div>
-    </div>
-  )
-}
-
-function UpcomingTile({
-  title,
-  logoSrc,
-  logoAlt,
-  logoWidth,
-  logoHeight,
-  badgeClass,
-  summary,
-  bullets,
-}: {
-  title: string
-  logoSrc: string
-  logoAlt: string
-  logoWidth: number
-  logoHeight: number
-  badgeClass: string
-  summary: string
-  bullets: string[]
-}) {
-  return (
-    <div className="rounded-2xl border border-dashed border-[#d4d4d4] bg-white p-6 dark:border-[#2f2f2f] dark:bg-[#121212]">
-      <div className="flex items-start justify-between gap-4">
-        <div className="flex h-8 items-center">
-          <Image
-            src={logoSrc}
-            alt={logoAlt}
-            width={logoWidth}
-            height={logoHeight}
-            className="h-auto w-auto max-h-7 object-contain object-left opacity-80"
-          />
-        </div>
-        <span className={`rounded-full px-2.5 py-1 text-[10px] font-medium uppercase tracking-wider ${badgeClass}`}>
-          Coming soon
-        </span>
-      </div>
-      <h3 className="mt-4 text-base font-semibold text-[#0a0a0a] dark:text-[#fafafa]">{title}</h3>
-      <p className="mt-2 text-[13px] leading-relaxed text-[#525252] dark:text-[#a3a3a3]">{summary}</p>
-      <ul className="mt-4 space-y-1.5 text-[12px] text-[#737373]">
-        {bullets.map((b) => (
-          <li key={b} className="flex gap-2">
-            <span className="text-[#a3a3a3]">•</span>
-            <span>{b}</span>
-          </li>
-        ))}
-      </ul>
     </div>
   )
 }

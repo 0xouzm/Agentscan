@@ -13,6 +13,7 @@ from src.services.virtuals_acp_ingestion import (
 )
 from src.services.bnb_agent_overview import fetch_bnb_agent_overview
 from src.services.virtuals_acp_overview import fetch_scan_overview
+from src.services.x402_overview import fetch_x402_overview
 
 router = APIRouter()
 
@@ -63,6 +64,25 @@ async def get_bnb_agent_scan(
             blocks_limit=blocks_limit,
             commits_limit=commits_limit,
         )
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=502, detail=f"upstream_error: {exc}") from exc
+
+
+@router.get("/ecosystems/x402/scan")
+async def get_x402_scan(
+    resources_limit: int = 8,
+    db: Session = Depends(get_db),
+):
+    """Live overview of the x402 payment ecosystem.
+
+    Combines x402.org official 30D metrics, official ecosystem membership,
+    Coinbase CDP Bazaar discovery resources, and local Agentscan metadata tags.
+    Cached for 30 minutes by the service layer.
+    """
+    if not 1 <= resources_limit <= 20:
+        raise HTTPException(status_code=400, detail="resources_limit must be 1..20")
+    try:
+        return await fetch_x402_overview(db, resources_limit=resources_limit)
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=502, detail=f"upstream_error: {exc}") from exc
 

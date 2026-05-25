@@ -9,6 +9,7 @@ from src.models.ecosystem import (
     AgentCapability,
     AgentEcosystemLink,
     IngestionRun,
+    X402EcosystemSnapshot,
 )
 from src.models.feedback import Feedback
 from src.models.validation import Validation
@@ -25,6 +26,7 @@ __all__ = [
     "AgentEcosystemLink",
     "BlockchainSync",
     "IngestionRun",
+    "X402EcosystemSnapshot",
     "SyncStatusEnum",
     "Feedback",
     "Validation",
