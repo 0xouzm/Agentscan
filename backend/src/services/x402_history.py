@@ -19,7 +19,7 @@ HISTORY_LIMIT = 12
 
 
 def record_x402_snapshot(db: Session, overview: dict[str, Any]) -> None:
-    """Persist a new snapshot when enough time has passed since the last one."""
+    """Persist a new snapshot, or refresh the latest one within the interval."""
     fetched_at = datetime.utcfromtimestamp(float(overview.get("fetched_at") or time.time()))
     try:
         latest = (
@@ -27,27 +27,26 @@ def record_x402_snapshot(db: Session, overview: dict[str, Any]) -> None:
             .order_by(X402EcosystemSnapshot.snapshot_time.desc())
             .first()
         )
-        if latest and (fetched_at - latest.snapshot_time).total_seconds() < SNAPSHOT_MIN_INTERVAL_SECONDS:
-            return
-
         official = overview.get("official_stats") or {}
         discovery = overview.get("discovery") or {}
         agentscan = overview.get("agentscan") or {}
-        snapshot = X402EcosystemSnapshot(
-            snapshot_time=fetched_at,
-            transactions_30d=_stat_value(official, "transactions"),
-            volume_30d=_stat_value(official, "volume"),
-            buyers_30d=_stat_value(official, "buyers"),
-            sellers_30d=_stat_value(official, "sellers"),
-            total_resources=discovery.get("total_resources"),
-            sampled_resources=discovery.get("sampled_resources"),
-            priced_resources=discovery.get("priced_resources"),
-            base_resources=_count_named(discovery.get("networks") or [], "eip155:8453"),
-            x402_capability_agents=agentscan.get("x402_capability_agents"),
-            agentkit_capability_agents=agentscan.get("agentkit_capability_agents"),
-            payable_capability_agents=agentscan.get("payable_capability_agents"),
-            discovery_status=discovery.get("status"),
-        )
+        snapshot = latest if latest and (
+            fetched_at - latest.snapshot_time
+        ).total_seconds() < SNAPSHOT_MIN_INTERVAL_SECONDS else X402EcosystemSnapshot()
+
+        snapshot.snapshot_time = fetched_at
+        snapshot.transactions_30d = _stat_value(official, "transactions")
+        snapshot.volume_30d = _stat_value(official, "volume")
+        snapshot.buyers_30d = _stat_value(official, "buyers")
+        snapshot.sellers_30d = _stat_value(official, "sellers")
+        snapshot.total_resources = discovery.get("total_resources")
+        snapshot.sampled_resources = discovery.get("sampled_resources")
+        snapshot.priced_resources = discovery.get("priced_resources")
+        snapshot.base_resources = _count_named(discovery.get("networks") or [], "eip155:8453")
+        snapshot.x402_capability_agents = agentscan.get("x402_capability_agents")
+        snapshot.agentkit_capability_agents = agentscan.get("agentkit_capability_agents")
+        snapshot.payable_capability_agents = agentscan.get("payable_capability_agents")
+        snapshot.discovery_status = discovery.get("status")
         db.add(snapshot)
         db.commit()
     except SQLAlchemyError as exc:

@@ -11,11 +11,9 @@ from urllib.parse import urlparse
 
 import httpx
 import structlog
-from sqlalchemy import distinct, func
-from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
-from src.models import AgentCapability, AgentEcosystemLink
+from src.services.x402_agent_signals import local_x402_snapshot
 from src.services.x402_history import get_x402_history, record_x402_snapshot
 from src.services.x402_pricing import amount_usd, price_distribution
 
@@ -54,7 +52,7 @@ async def fetch_x402_overview(db: Session, resources_limit: int = 8) -> dict[str
     cache_key = f"x402:{resources_limit}"
 
     async def _load() -> dict[str, Any]:
-        local = _local_x402_snapshot(db)
+        local = local_x402_snapshot(db)
         async with httpx.AsyncClient(
             timeout=15.0,
             headers={
@@ -183,42 +181,6 @@ def _empty_ecosystem() -> dict[str, Any]:
         "integration_count": 0,
         "category_breakdown": [],
     }
-
-
-def _local_x402_snapshot(db: Session) -> dict[str, Any]:
-    linked_agents = _distinct_link_count(db, "coinbase")
-    return {
-        "coinbase_linked_agents": linked_agents,
-        "x402_capability_agents": _distinct_capability_count(db, "x402"),
-        "agentkit_capability_agents": _distinct_capability_count(db, "agentkit"),
-        "payable_capability_agents": _distinct_capability_count(db, "payable"),
-    }
-
-
-def _distinct_link_count(db: Session, ecosystem_name: str) -> int:
-    try:
-        return int(
-            db.query(func.count(distinct(AgentEcosystemLink.agent_id)))
-            .filter(AgentEcosystemLink.ecosystem_name == ecosystem_name)
-            .scalar()
-            or 0
-        )
-    except SQLAlchemyError:
-        db.rollback()
-        return 0
-
-
-def _distinct_capability_count(db: Session, capability_name: str) -> int:
-    try:
-        return int(
-            db.query(func.count(distinct(AgentCapability.agent_id)))
-            .filter(AgentCapability.capability_name == capability_name)
-            .scalar()
-            or 0
-        )
-    except SQLAlchemyError:
-        db.rollback()
-        return 0
 
 
 def _resource_summary(item: dict[str, Any]) -> dict[str, Any]:

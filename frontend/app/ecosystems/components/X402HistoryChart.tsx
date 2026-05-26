@@ -67,7 +67,7 @@ export default function X402HistoryChart({
           <TrendStat label="30D Tx" value={latest?.transactions_30d} delta={latestDelta(rows, 'transactions_30d')} title="Official x402.org completed payments over the last 30 days." />
           <TrendStat label="30D Vol" value={latest?.volume_30d} delta={latestDelta(rows, 'volume_30d')} prefix="$" title="Official x402.org settlement volume over the last 30 days." />
           <TrendStat label="Bazaar" value={latest?.total_resources} delta={latestDelta(rows, 'total_resources')} title="Public paid HTTP resources reported by Coinbase CDP Bazaar discovery." />
-          <TrendStat label="Agentscan" value={latest?.x402_capability_agents} delta={latestDelta(rows, 'x402_capability_agents')} title="Local Agentscan agents tagged with x402 capability." />
+          <TrendStat label="Agentscan" value={latest?.x402_capability_agents} delta={latestDelta(rows, 'x402_capability_agents')} title="Local Agentscan agents whose metadata declares x402 capability." />
         </div>
       </div>
       <div className="mt-5 h-64">
@@ -93,7 +93,7 @@ export default function X402HistoryChart({
               <Line yAxisId="tx" name="30D Tx" type="monotone" dataKey="transactions_30d" stroke="#16a34a" strokeWidth={2.5} dot={{ r: 3 }} activeDot={{ r: 5 }} />
               <Line yAxisId="vol" name="30D Volume" type="monotone" dataKey="volume_30d" stroke="#2563eb" strokeWidth={2.5} dot={{ r: 3 }} activeDot={{ r: 5 }} />
               <Line yAxisId="tx" name="Bazaar Resources" type="monotone" dataKey="total_resources" stroke="#f59e0b" strokeWidth={2} dot={{ r: 3 }} activeDot={{ r: 5 }} />
-              <Line yAxisId="tx" name="Agentscan x402 Tags" type="monotone" dataKey="x402_capability_agents" stroke="#7c3aed" strokeWidth={2} strokeDasharray="4 4" dot={{ r: 3 }} activeDot={{ r: 5 }} />
+              <Line yAxisId="tx" name="Agentscan x402 Agents" type="monotone" dataKey="x402_capability_agents" stroke="#7c3aed" strokeWidth={2} strokeDasharray="4 4" dot={{ r: 3 }} activeDot={{ r: 5 }} />
             </LineChart>
           </ResponsiveContainer>
         )}

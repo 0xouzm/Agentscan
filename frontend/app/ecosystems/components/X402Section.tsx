@@ -29,7 +29,7 @@ function shortNetwork(value: string): string {
 }
 
 const ROW_HINTS: Record<string, string> = {
-  'Agentscan x402 tags': 'Local Agentscan agents whose metadata declares x402 capability.',
+  'Agentscan x402 agents': 'Local Agentscan agents whose metadata declares x402 capability.',
   'AgentKit tags': 'Local Agentscan agents whose metadata references Coinbase AgentKit.',
   'Payable agents': 'Local Agentscan agents whose metadata indicates a payable endpoint or payment capability.',
   'Discovery status': 'Whether the Coinbase CDP x402 Bazaar discovery API returned a usable live sample.',
@@ -90,7 +90,7 @@ export default function X402Section({
         <BreakdownPanel
           title="Agentscan Payment Tags"
           rows={[
-            ['Agentscan x402 tags', formatInt(agentscan?.x402_capability_agents)],
+            ['Agentscan x402 agents', formatInt(agentscan?.x402_capability_agents)],
             ['AgentKit tags', formatInt(agentscan?.agentkit_capability_agents)],
             ['Payable agents', formatInt(agentscan?.payable_capability_agents)],
             ['Discovery status', discovery?.status ?? '--'],
