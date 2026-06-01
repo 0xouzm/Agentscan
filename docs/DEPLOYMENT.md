@@ -271,18 +271,90 @@ sudo tail -f /var/log/nginx/error.log
 tail -f logs/backend/*.log
 ```
 
-### 更新代码
+### 更新代码与线上修复
+
+生产环境更新必须走 Git，不要在服务器上直接编辑或 `scp` 覆盖 tracked 文件。所有修复先在本地完成、验证、提交并 push；服务器只负责拉取已提交的代码并重建容器。这样可以保证下次同步不会丢改动，也能明确回滚点。
+
+#### 标准流程
+
+**本地：**
 
 ```bash
-# 拉取最新代码
-git pull origin main
+# 1. 修改代码并验证
+cd /path/to/agentscan
+cd backend && uv run python -m py_compile src/path/to/file.py
+cd ../frontend && npm run build
 
-# 重新构建并重启容器
-docker compose down
-docker compose up -d --build
+# 2. 只提交本次修复相关文件
+git status --short
+git add <changed-files>
+git commit -m "concise fix description"
+git push origin master
+```
 
-# 查看容器状态
+**服务器：**
+
+```bash
+# 1. 登录服务器并进入项目目录
+ssh empath
+cd /home/admin/Agentscan
+
+# 2. 确认没有未处理的 tracked 修改
+git status --short
+
+# 如果因为误操作出现 tracked 修改，先 stash 指定文件，不要直接覆盖：
+# git stash push -m "server-direct-change-before-pull" -- path/to/file
+
+# 3. 只允许快进到已提交版本
+git pull --ff-only origin master
+git rev-parse --short HEAD
+
+# 4. 按变更范围重建
+./scripts/docker-update.sh backend    # 仅后端变更
+./scripts/docker-update.sh frontend   # 仅前端变更
+./scripts/docker-update.sh all        # 前后端都变更
+
+# 5. 验证
 docker compose ps
+curl -sS http://127.0.0.1:8001/health
+curl -sS https://agentscan.info/api/stats | head -c 300
+```
+
+#### 不允许的操作
+
+```bash
+# 不要直接在服务器上修 tracked 文件
+nano backend/src/...
+
+# 不要用 scp/rsync 覆盖 tracked 文件作为正式部署方式
+scp local-file empath:/home/admin/Agentscan/...
+
+# 不要用 git reset --hard 或 git clean 清理用户/线上遗留文件，除非明确确认
+git reset --hard
+git clean -fd
+```
+
+#### Untracked 文件处理
+
+`git pull` 不会删除服务器上的 untracked 文件，但干净部署、重新 clone、`git clean -fd` 或带删除参数的同步会删除它们。发现 untracked 文件时按下面处理：
+
+```bash
+git status --short --untracked-files=all
+```
+
+- 如果是线上需要保留的功能文件，先拉回本地审查，然后正式提交。
+- 如果是服务器临时工具或运行产物，保留在服务器即可，不要提交。
+- 如果确认无用，再单独删除；不要和业务修复混在同一个操作里。
+
+#### 快速回滚
+
+```bash
+cd /home/admin/Agentscan
+git log --oneline -5
+git revert <bad-commit>
+git push origin master
+git pull --ff-only origin master
+./scripts/docker-update.sh all
 ```
 
 ### 备份数据
