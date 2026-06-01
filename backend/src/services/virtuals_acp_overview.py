@@ -166,7 +166,7 @@ async def fetch_scan_overview(top_agents_limit: int = 10, tx_limit: int = 10) ->
     async def _load() -> dict[str, Any]:
         async with httpx.AsyncClient(
             base_url=ACPX_BASE_URL,
-            timeout=15.0,
+            timeout=6.0,
             headers={
                 "User-Agent": "agentscan/1.0 (+https://agentscan.info)",
                 "Accept": "application/json",
@@ -186,12 +186,25 @@ async def fetch_scan_overview(top_agents_limit: int = 10, tx_limit: int = 10) ->
             )
 
             try:
-                metrics_raw, top_agents_raw, interactions_raw = await asyncio.gather(
-                    metrics_task, top_agents_task, interactions_task
+                metrics_raw, top_agents_raw, interactions_raw = await asyncio.wait_for(
+                    asyncio.gather(
+                        metrics_task,
+                        top_agents_task,
+                        interactions_task,
+                        return_exceptions=True,
+                    ),
+                    timeout=3.0,
                 )
-            except Exception as exc:  # noqa: BLE001
-                logger.error("virtuals_acp_scan_fetch_failed", error=str(exc))
-                raise
+                metrics_raw = _result_or_default(metrics_raw, {}, "virtuals_acp_metrics_failed")
+                top_agents_raw = _result_or_default(top_agents_raw, {}, "virtuals_acp_agents_failed")
+                interactions_raw = _result_or_default(
+                    interactions_raw,
+                    {},
+                    "virtuals_acp_interactions_failed",
+                )
+            except TimeoutError:
+                logger.warning("virtuals_acp_scan_timeout")
+                metrics_raw, top_agents_raw, interactions_raw = {}, {}, {}
 
         return {
             "source": "acpx.virtuals.io",
@@ -202,3 +215,10 @@ async def fetch_scan_overview(top_agents_limit: int = 10, tx_limit: int = 10) ->
         }
 
     return await _cache.get_or_set(cache_key, _load)
+
+
+def _result_or_default(result: Any, default: dict[str, Any], event: str) -> dict[str, Any]:
+    if isinstance(result, Exception):
+        logger.warning(event, error=str(result))
+        return default
+    return result

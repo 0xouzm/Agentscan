@@ -24,6 +24,8 @@ import type {
   TrendingAgentsResponse,
 } from '@/types'
 
+const HOME_REFRESH_MS = 60000
+
 export default function HomePage() {
   const router = useRouter()
   const [stats, setStats] = useState<Stats | null>(null)
@@ -43,7 +45,7 @@ export default function HomePage() {
     }
 
     fetchStats()
-    const interval = setInterval(fetchStats, 10000)
+    const interval = setInterval(fetchStats, HOME_REFRESH_MS)
     return () => clearInterval(interval)
   }, [])
 
@@ -70,7 +72,7 @@ export default function HomePage() {
     }
 
     fetchActivities()
-    const interval = setInterval(fetchActivities, 10000)
+    const interval = setInterval(fetchActivities, HOME_REFRESH_MS)
     return () => clearInterval(interval)
   }, [])
 

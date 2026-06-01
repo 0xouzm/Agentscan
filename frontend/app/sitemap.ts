@@ -25,7 +25,9 @@ const staticRoutes: MetadataRoute.Sitemap = [
 ]
 
 const AGENTS_PER_PAGE = 100
-const MAX_AGENT_PAGES = 100 // Cap at 10,000 agents in sitemap
+const MAX_AGENT_PAGES = 20 // Cap dynamic agent URLs to keep sitemap generation cheap
+
+export const revalidate = 86400
 
 export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
   const entries: MetadataRoute.Sitemap = [...staticRoutes]
@@ -37,8 +39,13 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
     MAX_AGENT_PAGES
   )
 
-  for (let page = 1; page <= totalPages; page++) {
-    const { items } = await fetchAgentPage(page, AGENTS_PER_PAGE)
+  const pages = await Promise.all(
+    Array.from({ length: totalPages }, (_, index) =>
+      fetchAgentPage(index + 1, AGENTS_PER_PAGE)
+    )
+  )
+
+  for (const { items } of pages) {
     for (const agent of items) {
       entries.push({
         url: `${SITE_URL}/agents/${agent.id}`,

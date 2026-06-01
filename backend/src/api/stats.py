@@ -32,6 +32,8 @@ class RegistrationTrendResponse(BaseModel):
 # 缓存 latest_block，避免每次请求都调用 RPC
 _block_cache: Dict[str, Dict[str, Any]] = {}
 CACHE_TTL_SECONDS = 60  # 缓存 60 秒
+STATS_CACHE_TTL_SECONDS = 30
+_stats_cache: Dict[str, Any] = {}
 
 router = APIRouter()
 
@@ -75,6 +77,15 @@ async def _fetch_latest_block(network_key: str, rpc_url: str) -> tuple[str, int 
 @router.get("/stats", response_model=StatsResponse)
 async def get_stats(db: Session = Depends(get_db)):
     """获取整体统计数据"""
+    now = datetime.utcnow()
+    cached_at = _stats_cache.get("cached_at")
+    cached_value = _stats_cache.get("value")
+    if (
+        cached_at
+        and cached_value is not None
+        and (now - cached_at).total_seconds() < STATS_CACHE_TTL_SECONDS
+    ):
+        return cached_value
 
     total_agents = db.query(Agent).count()
 
@@ -180,15 +191,18 @@ async def get_stats(db: Session = Depends(get_db)):
     except Exception:
         pass
 
-    return StatsResponse(
+    response = StatsResponse(
         total_agents=total_agents,
         active_agents=active_agents,
         total_networks=total_networks,
         total_activities=total_activities,
-        updated_at=datetime.utcnow().isoformat(),
+        updated_at=now.isoformat(),
         blockchain_sync=blockchain_sync,
         multi_network_sync=multi_network_sync
     )
+    _stats_cache["cached_at"] = now
+    _stats_cache["value"] = response
+    return response
 
 
 @router.get("/stats/registration-trend", response_model=RegistrationTrendResponse)

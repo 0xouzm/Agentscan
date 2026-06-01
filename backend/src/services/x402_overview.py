@@ -54,7 +54,7 @@ async def fetch_x402_overview(db: Session, resources_limit: int = 8) -> dict[str
     async def _load() -> dict[str, Any]:
         local = local_x402_snapshot(db)
         async with httpx.AsyncClient(
-            timeout=15.0,
+            timeout=6.0,
             headers={
                 "User-Agent": "agentscan/1.0 (+https://agentscan.info)",
                 "Accept": "application/json,text/html",
@@ -63,10 +63,14 @@ async def fetch_x402_overview(db: Session, resources_limit: int = 8) -> dict[str
         ) as client:
             home_task = _safe_text(client, X402_HOME_URL, "x402_home")
             discovery_task = _safe_discovery(client, resources_limit)
-            home_html, discovery = await asyncio.gather(
-                home_task,
-                discovery_task,
-            )
+            try:
+                home_html, discovery = await asyncio.wait_for(
+                    asyncio.gather(home_task, discovery_task),
+                    timeout=3.0,
+                )
+            except TimeoutError:
+                logger.warning("x402_overview_timeout")
+                home_html, discovery = "", _empty_discovery()
 
         overview = {
             "source": {
@@ -104,18 +108,22 @@ async def _safe_discovery(client: httpx.AsyncClient, resources_limit: int) -> di
         return await _fetch_discovery(client, resources_limit)
     except Exception as exc:  # noqa: BLE001
         logger.warning("x402_discovery_fetch_failed", error=str(exc))
-        return {
-            "status": "unavailable",
-            "total_resources": None,
-            "sampled_resources": 0,
-            "priced_resources": 0,
-            "x402_version": None,
-            "networks": [],
-            "schemes": [],
-            "assets": [],
-            "price_distribution": [],
-            "recent_resources": [],
-        }
+        return _empty_discovery()
+
+
+def _empty_discovery() -> dict[str, Any]:
+    return {
+        "status": "unavailable",
+        "total_resources": None,
+        "sampled_resources": 0,
+        "priced_resources": 0,
+        "x402_version": None,
+        "networks": [],
+        "schemes": [],
+        "assets": [],
+        "price_distribution": [],
+        "recent_resources": [],
+    }
 
 
 async def _fetch_discovery(client: httpx.AsyncClient, resources_limit: int) -> dict[str, Any]:
