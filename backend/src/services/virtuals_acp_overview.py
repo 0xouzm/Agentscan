@@ -37,7 +37,8 @@ class _TTLCache:
             if cached and now - cached[0] < self._ttl:
                 return cached[1]
             value = await loader()
-            self._store[key] = (now, value)
+            if _has_scan_data(value):
+                self._store[key] = (now, value)
             return value
 
 
@@ -193,7 +194,7 @@ async def fetch_scan_overview(top_agents_limit: int = 10, tx_limit: int = 10) ->
                         interactions_task,
                         return_exceptions=True,
                     ),
-                    timeout=3.0,
+                    timeout=8.0,
                 )
                 metrics_raw = _result_or_default(metrics_raw, {}, "virtuals_acp_metrics_failed")
                 top_agents_raw = _result_or_default(top_agents_raw, {}, "virtuals_acp_agents_failed")
@@ -209,6 +210,7 @@ async def fetch_scan_overview(top_agents_limit: int = 10, tx_limit: int = 10) ->
         return {
             "source": "acpx.virtuals.io",
             "fetched_at": time.time(),
+            "cache_ttl_seconds": CACHE_TTL_SECONDS,
             "metrics": _transform_four_metrics(metrics_raw),
             "top_agents": _transform_top_agents(top_agents_raw, top_agents_limit),
             "recent_transactions": _transform_interactions(interactions_raw, tx_limit),
@@ -222,3 +224,9 @@ def _result_or_default(result: Any, default: dict[str, Any], event: str) -> dict
         logger.warning(event, error=str(result))
         return default
     return result
+
+
+def _has_scan_data(value: dict[str, Any]) -> bool:
+    metrics = value.get("metrics") or {}
+    has_metric = any((item or {}).get("value") is not None for item in metrics.values())
+    return has_metric or bool(value.get("top_agents")) or bool(value.get("recent_transactions"))

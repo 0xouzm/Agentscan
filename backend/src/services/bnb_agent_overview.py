@@ -43,7 +43,8 @@ class _TTLCache:
             if cached and now - cached[0] < self._ttl:
                 return cached[1]
             value = await loader()
-            self._store[key] = (now, value)
+            if _has_external_data(value):
+                self._store[key] = (now, value)
             return value
 
 
@@ -82,7 +83,7 @@ async def fetch_bnb_agent_overview(
                         execution_task,
                         return_exceptions=True,
                     ),
-                    timeout=3.0,
+                    timeout=6.0,
                 )
                 nfascan = _result_or_default(nfascan, _empty_nfascan(), "nfascan_overview_failed")
                 github = _result_or_default(github, _empty_github(), "bnb_github_fetch_failed")
@@ -291,3 +292,14 @@ def _maturity(
             ),
         },
     }
+
+
+def _has_external_data(value: dict[str, Any]) -> bool:
+    nfascan = value.get("nfascan") or {}
+    sdk = value.get("sdk") or {}
+    execution = value.get("execution") or {}
+    return (
+        (nfascan.get("health") or {}).get("status") != "unavailable"
+        or bool(sdk.get("recent_commits"))
+        or execution.get("job_counter") is not None
+    )

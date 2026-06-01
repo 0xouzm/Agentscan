@@ -39,7 +39,8 @@ class _TTLCache:
             if cached and now - cached[0] < self._ttl:
                 return cached[1]
             value = await loader()
-            self._store[key] = (now, value)
+            if _has_discovery_data(value):
+                self._store[key] = (now, value)
             return value
 
 
@@ -66,7 +67,7 @@ async def fetch_x402_overview(db: Session, resources_limit: int = 8) -> dict[str
             try:
                 home_html, discovery = await asyncio.wait_for(
                     asyncio.gather(home_task, discovery_task),
-                    timeout=3.0,
+                    timeout=8.0,
                 )
             except TimeoutError:
                 logger.warning("x402_overview_timeout")
@@ -261,3 +262,8 @@ def _maturity(local: dict[str, Any], discovery: dict[str, Any]) -> dict[str, Any
             "evidence": "Discovery resources advertise accepted networks and exact payment schemes.",
         },
     }
+
+
+def _has_discovery_data(value: dict[str, Any]) -> bool:
+    discovery = value.get("discovery") or {}
+    return discovery.get("status") == "live" or bool(discovery.get("recent_resources"))
