@@ -14,6 +14,7 @@ import httpx
 import structlog
 from sqlalchemy.orm import Session
 
+from src.db.database import SessionLocal
 from src.services.bnb_agent_sources import (
     APEX_ERC8183_ADDRESS,
     APEX_EVALUATOR_ADDRESS,
@@ -22,6 +23,7 @@ from src.services.bnb_agent_sources import (
     fetch_execution_state,
     local_agentscan_snapshot,
 )
+from src.services.stale_cache import StaleWhileRevalidateCache
 
 logger = structlog.get_logger()
 
@@ -30,25 +32,10 @@ GITHUB_API_BASE_URL = "https://api.github.com"
 CACHE_TTL_SECONDS = 10 * 60
 
 
-class _TTLCache:
-    def __init__(self, ttl: float) -> None:
-        self._ttl = ttl
-        self._store: dict[str, tuple[float, Any]] = {}
-        self._lock = asyncio.Lock()
-
-    async def get_or_set(self, key: str, loader):
-        async with self._lock:
-            now = time.monotonic()
-            cached = self._store.get(key)
-            if cached and now - cached[0] < self._ttl:
-                return cached[1]
-            value = await loader()
-            if _has_external_data(value):
-                self._store[key] = (now, value)
-            return value
-
-
-_cache = _TTLCache(CACHE_TTL_SECONDS)
+_cache = StaleWhileRevalidateCache(
+    CACHE_TTL_SECONDS,
+    lambda value: _has_external_data(value),
+)
 
 
 async def fetch_bnb_agent_overview(
@@ -61,8 +48,8 @@ async def fetch_bnb_agent_overview(
 
     cache_key = f"bnb:{events_limit}:{blocks_limit}:{commits_limit}"
 
-    async def _load() -> dict[str, Any]:
-        agentscan = local_agentscan_snapshot(db)
+    async def _load(load_db: Session) -> dict[str, Any]:
+        agentscan = local_agentscan_snapshot(load_db)
 
         async with httpx.AsyncClient(
             timeout=6.0,
@@ -108,7 +95,18 @@ async def fetch_bnb_agent_overview(
             "maturity": _maturity(agentscan, nfascan, github, execution),
         }
 
-    return await _cache.get_or_set(cache_key, _load)
+    async def _refresh_load() -> dict[str, Any]:
+        refresh_db = SessionLocal()
+        try:
+            return await _load(refresh_db)
+        finally:
+            refresh_db.close()
+
+    return await _cache.get_or_set(
+        cache_key,
+        lambda: _load(db),
+        refresh_loader=_refresh_load,
+    )
 
 async def _fetch_nfascan(
     client: httpx.AsyncClient,

@@ -10,6 +10,7 @@ import BnbAgentSection from './components/BnbAgentSection'
 import X402Section from './components/X402Section'
 
 const REFRESH_MS = 4 * 60 * 60 * 1000
+type EcosystemLoadingState = { virtuals: boolean; bnb: boolean; x402: boolean }
 
 function formatCompact(value: number | null | undefined, prefix = ''): string {
   if (value == null || isNaN(value)) return '—'
@@ -62,47 +63,65 @@ export default function EcosystemsPageClient() {
   const [scan, setScan] = useState<VirtualsAcpScanResponse | null>(null)
   const [bnbScan, setBnbScan] = useState<BnbAgentScanResponse | null>(null)
   const [x402Scan, setX402Scan] = useState<X402ScanResponse | null>(null)
-  const [loading, setLoading] = useState(true)
+  const [loading, setLoading] = useState<EcosystemLoadingState>({
+    virtuals: true,
+    bnb: true,
+    x402: true,
+  })
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
     let cancelled = false
-    const load = async () => {
-      const [acpResult, bnbResult, x402Result] = await Promise.allSettled([
-        ecosystemService.getVirtualsAcpScan(10, 10),
-        ecosystemService.getBnbAgentScan(6, 4, 5),
-        ecosystemService.getX402Scan(8),
-      ])
-      if (cancelled) return
 
-      if (acpResult.status === 'fulfilled') {
-        setScan(acpResult.value)
-      } else {
-        console.error('Failed to load Virtuals ACP data:', acpResult.reason)
-      }
-
-      if (bnbResult.status === 'fulfilled') {
-        setBnbScan(bnbResult.value)
-      } else {
-        console.error('Failed to load BNB Agent data:', bnbResult.reason)
-      }
-
-      if (x402Result.status === 'fulfilled') {
-        setX402Scan(x402Result.value)
-      } else {
-        console.error('Failed to load x402 data:', x402Result.reason)
-      }
-
-      const failed = (
-        acpResult.status === 'rejected'
-        || bnbResult.status === 'rejected'
-        || x402Result.status === 'rejected'
-      )
-      setError(failed ? 'Some live ecosystem data failed to refresh.' : null)
-      setLoading(false)
+    const setSectionLoading = (key: keyof EcosystemLoadingState, value: boolean) => {
+      setLoading((current) => ({ ...current, [key]: value }))
     }
+    const markFailed = (label: string, reason: unknown) => {
+      console.error(`Failed to load ${label} data:`, reason)
+      setError('Some live ecosystem data failed to refresh.')
+    }
+    const loadVirtuals = async (showLoading = true) => {
+      if (showLoading) setSectionLoading('virtuals', true)
+      try {
+        const data = await ecosystemService.getVirtualsAcpScan(10, 10)
+        if (!cancelled) setScan(data)
+      } catch (reason) {
+        if (!cancelled) markFailed('Virtuals ACP', reason)
+      } finally {
+        if (!cancelled && showLoading) setSectionLoading('virtuals', false)
+      }
+    }
+    const loadBnb = async (showLoading = true) => {
+      if (showLoading) setSectionLoading('bnb', true)
+      try {
+        const data = await ecosystemService.getBnbAgentScan(6, 4, 5)
+        if (!cancelled) setBnbScan(data)
+      } catch (reason) {
+        if (!cancelled) markFailed('BNB Agent', reason)
+      } finally {
+        if (!cancelled && showLoading) setSectionLoading('bnb', false)
+      }
+    }
+    const loadX402 = async (showLoading = true) => {
+      if (showLoading) setSectionLoading('x402', true)
+      try {
+        const data = await ecosystemService.getX402Scan(8)
+        if (!cancelled) setX402Scan(data)
+      } catch (reason) {
+        if (!cancelled) markFailed('x402', reason)
+      } finally {
+        if (!cancelled && showLoading) setSectionLoading('x402', false)
+      }
+    }
+    const load = (showLoading = true) => {
+      setError(null)
+      void loadVirtuals(showLoading)
+      void loadBnb(showLoading)
+      void loadX402(showLoading)
+    }
+
     load()
-    const id = setInterval(load, REFRESH_MS)
+    const id = setInterval(() => load(false), REFRESH_MS)
     return () => {
       cancelled = true
       clearInterval(id)
@@ -120,11 +139,11 @@ export default function EcosystemsPageClient() {
           </div>
         )}
 
-        <VirtualsAcpSection scan={scan} loading={loading} />
+        <VirtualsAcpSection scan={scan} loading={loading.virtuals} />
 
-        <BnbAgentSection scan={bnbScan} loading={loading} />
+        <BnbAgentSection scan={bnbScan} loading={loading.bnb} />
 
-        <X402Section scan={x402Scan} loading={loading} />
+        <X402Section scan={x402Scan} loading={loading.x402} />
       </div>
     </div>
   )

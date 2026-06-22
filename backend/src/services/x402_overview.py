@@ -13,6 +13,8 @@ import httpx
 import structlog
 from sqlalchemy.orm import Session
 
+from src.db.database import SessionLocal
+from src.services.stale_cache import StaleWhileRevalidateCache
 from src.services.x402_agent_signals import local_x402_snapshot
 from src.services.x402_history import get_x402_history, record_x402_snapshot
 from src.services.x402_pricing import amount_usd, price_distribution
@@ -26,25 +28,10 @@ DISCOVERY_PAGE_SIZE = 20
 DISCOVERY_SAMPLE_PAGES = 10
 
 
-class _TTLCache:
-    def __init__(self, ttl: float) -> None:
-        self._ttl = ttl
-        self._store: dict[str, tuple[float, Any]] = {}
-        self._lock = asyncio.Lock()
-
-    async def get_or_set(self, key: str, loader):
-        async with self._lock:
-            now = time.monotonic()
-            cached = self._store.get(key)
-            if cached and now - cached[0] < self._ttl:
-                return cached[1]
-            value = await loader()
-            if _has_discovery_data(value):
-                self._store[key] = (now, value)
-            return value
-
-
-_cache = _TTLCache(CACHE_TTL_SECONDS)
+_cache = StaleWhileRevalidateCache(
+    CACHE_TTL_SECONDS,
+    lambda value: _has_discovery_data(value),
+)
 
 
 async def fetch_x402_overview(db: Session, resources_limit: int = 8) -> dict[str, Any]:
@@ -52,8 +39,8 @@ async def fetch_x402_overview(db: Session, resources_limit: int = 8) -> dict[str
 
     cache_key = f"x402:{resources_limit}"
 
-    async def _load() -> dict[str, Any]:
-        local = local_x402_snapshot(db)
+    async def _load(load_db: Session) -> dict[str, Any]:
+        local = local_x402_snapshot(load_db)
         async with httpx.AsyncClient(
             timeout=6.0,
             headers={
@@ -87,11 +74,22 @@ async def fetch_x402_overview(db: Session, resources_limit: int = 8) -> dict[str
             "agentscan": local,
             "maturity": _maturity(local, discovery),
         }
-        record_x402_snapshot(db, overview)
-        overview["history"] = get_x402_history(db)
+        record_x402_snapshot(load_db, overview)
+        overview["history"] = get_x402_history(load_db)
         return overview
 
-    return await _cache.get_or_set(cache_key, _load)
+    async def _refresh_load() -> dict[str, Any]:
+        refresh_db = SessionLocal()
+        try:
+            return await _load(refresh_db)
+        finally:
+            refresh_db.close()
+
+    return await _cache.get_or_set(
+        cache_key,
+        lambda: _load(db),
+        refresh_loader=_refresh_load,
+    )
 
 
 async def _safe_text(client: httpx.AsyncClient, url: str, label: str) -> str:

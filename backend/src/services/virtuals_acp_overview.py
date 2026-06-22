@@ -18,31 +18,18 @@ from typing import Any
 import httpx
 import structlog
 
+from src.services.stale_cache import StaleWhileRevalidateCache
+
 logger = structlog.get_logger()
 
 ACPX_BASE_URL = "https://acpx.virtuals.io"
 CACHE_TTL_SECONDS = 4 * 60 * 60  # 4 hours
 
 
-class _TTLCache:
-    def __init__(self, ttl: float) -> None:
-        self._ttl = ttl
-        self._store: dict[str, tuple[float, Any]] = {}
-        self._lock = asyncio.Lock()
-
-    async def get_or_set(self, key: str, loader):
-        async with self._lock:
-            now = time.monotonic()
-            cached = self._store.get(key)
-            if cached and now - cached[0] < self._ttl:
-                return cached[1]
-            value = await loader()
-            if _has_scan_data(value):
-                self._store[key] = (now, value)
-            return value
-
-
-_cache = _TTLCache(CACHE_TTL_SECONDS)
+_cache = StaleWhileRevalidateCache(
+    CACHE_TTL_SECONDS,
+    lambda value: _has_scan_data(value),
+)
 
 
 async def _get_json(client: httpx.AsyncClient, path: str) -> Any:
