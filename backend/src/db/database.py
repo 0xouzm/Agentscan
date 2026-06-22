@@ -8,7 +8,7 @@ from src.core.config import settings
 # Create database engine
 engine = create_engine(
     settings.database_url,
-    connect_args={"check_same_thread": False}
+    connect_args={"check_same_thread": False, "timeout": 30}
     if "sqlite" in settings.database_url
     else {},
 )
@@ -21,7 +21,7 @@ def _set_sqlite_pragmas(dbapi_connection, connection_record):
         return
     cursor = dbapi_connection.cursor()
     cursor.execute("PRAGMA journal_mode=WAL")
-    cursor.execute("PRAGMA busy_timeout=5000")
+    cursor.execute("PRAGMA busy_timeout=30000")
     cursor.execute("PRAGMA cache_size=-64000")
     cursor.execute("PRAGMA synchronous=NORMAL")
     cursor.execute("PRAGMA temp_store=MEMORY")

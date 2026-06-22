@@ -1,11 +1,10 @@
 """统计数据 API"""
 
-import asyncio
 from datetime import datetime, timedelta
+from threading import Lock
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 from sqlalchemy import func
-from web3 import Web3
 from typing import List, Dict, Any
 from pydantic import BaseModel
 
@@ -15,7 +14,7 @@ from src.schemas.common import (
     StatsResponse, BlockchainSyncStatus,
     NetworkSyncStatus, MultiNetworkSyncStatus
 )
-from src.core.networks_config import NETWORKS, get_enabled_networks
+from src.core.networks_config import get_enabled_networks
 
 
 class RegistrationTrendData(BaseModel):
@@ -29,55 +28,35 @@ class RegistrationTrendResponse(BaseModel):
     data: List[RegistrationTrendData]
 
 
-# 缓存 latest_block，避免每次请求都调用 RPC
-_block_cache: Dict[str, Dict[str, Any]] = {}
-CACHE_TTL_SECONDS = 60  # 缓存 60 秒
 STATS_CACHE_TTL_SECONDS = 30
 _stats_cache: Dict[str, Any] = {}
+_stats_cache_lock = Lock()
 
 router = APIRouter()
 
 
-def _get_cached_latest_block(network_key: str, rpc_url: str) -> int | None:
-    """获取缓存的 latest_block，如果缓存过期则返回 None"""
-    cache_entry = _block_cache.get(network_key)
-    if cache_entry:
-        cached_at = cache_entry.get("cached_at")
-        if cached_at and (datetime.utcnow() - cached_at).total_seconds() < CACHE_TTL_SECONDS:
-            return cache_entry.get("latest_block")
-    return None
-
-
-def _update_block_cache(network_key: str, latest_block: int) -> None:
-    """更新 latest_block 缓存"""
-    _block_cache[network_key] = {
-        "latest_block": latest_block,
-        "cached_at": datetime.utcnow()
-    }
-
-
-async def _fetch_latest_block(network_key: str, rpc_url: str) -> tuple[str, int | None]:
-    """异步获取网络的 latest_block（带缓存）"""
-    # 先检查缓存
-    cached = _get_cached_latest_block(network_key, rpc_url)
-    if cached is not None:
-        return (network_key, cached)
-
-    # 缓存未命中，发起 RPC 请求
-    try:
-        loop = asyncio.get_event_loop()
-        w3 = Web3(Web3.HTTPProvider(rpc_url))
-        latest_block = await loop.run_in_executor(None, lambda: w3.eth.block_number)
-        _update_block_cache(network_key, latest_block)
-        return (network_key, latest_block)
-    except Exception:
-        return (network_key, None)
-
-
 @router.get("/stats", response_model=StatsResponse)
-async def get_stats(db: Session = Depends(get_db)):
+def get_stats(db: Session = Depends(get_db)):
     """获取整体统计数据"""
     now = datetime.utcnow()
+    cached_value = _get_cached_stats(now)
+    if cached_value is not None:
+        return cached_value
+
+    with _stats_cache_lock:
+        now = datetime.utcnow()
+        cached_value = _get_cached_stats(now)
+        if cached_value is not None:
+            return cached_value
+
+        response = _build_stats_response(db, now)
+        _stats_cache["cached_at"] = now
+        _stats_cache["value"] = response
+        return response
+
+
+def _get_cached_stats(now: datetime) -> StatsResponse | None:
+    """Return cached stats when fresh enough."""
     cached_at = _stats_cache.get("cached_at")
     cached_value = _stats_cache.get("value")
     if (
@@ -86,13 +65,21 @@ async def get_stats(db: Session = Depends(get_db)):
         and (now - cached_at).total_seconds() < STATS_CACHE_TTL_SECONDS
     ):
         return cached_value
+    return None
 
-    total_agents = db.query(Agent).count()
+
+def _build_stats_response(db: Session, now: datetime) -> StatsResponse:
+    """Build stats from local database state only.
+
+    This endpoint is hit by the homepage and must not wait on chain RPC calls.
+    The scheduler updates blockchain_syncs.current_block during sync runs.
+    """
+    total_agents = _count_rows(db, Agent)
 
     # Active: has reputation activity in the last 7 days OR created recently (matching agents API logic)
-    seven_days_ago = datetime.utcnow() - timedelta(days=7)
-    active_agents = (
-        db.query(Agent).filter(
+    seven_days_ago = now - timedelta(days=7)
+    active_agents = int(
+        db.query(func.count(Agent.id)).filter(
             Agent.status == AgentStatus.ACTIVE,
             (
                 (Agent.reputation_last_updated >= seven_days_ago) |
@@ -101,97 +88,19 @@ async def get_stats(db: Session = Depends(get_db)):
                     (Agent.created_at >= seven_days_ago)
                 )
             )
-        ).count()
+        ).scalar() or 0
     )
     # Include external (non-EVM) implementations like Solana/SATI
-    EXTERNAL_NETWORK_COUNT = 1
-    total_networks = db.query(Network).count() + EXTERNAL_NETWORK_COUNT
-    total_activities = db.query(Activity).count()
-
-    # 获取多网络同步状态
-    multi_network_sync = None
-    blockchain_sync = None  # 保留向后兼容（Sepolia）
+    external_network_count = 1
+    total_networks = _count_rows(db, Network) + external_network_count
+    total_activities = _count_rows(db, Activity)
 
     try:
-        enabled_networks = get_enabled_networks()
-
-        # Batch load all sync trackers in one query (avoids N+1)
-        sync_map = {
-            s.network_name: s
-            for s in db.query(BlockchainSync).all()
-        }
-
-        # Collect networks that have both a sync tracker and RPC URL
-        networks_to_query: list[tuple[str, dict, BlockchainSync]] = []
-        for network_key, config in enabled_networks.items():
-            sync_tracker = sync_map.get(network_key)
-            if not sync_tracker:
-                continue
-
-            rpc_url = config.get("rpc_url", "")
-            if not rpc_url:
-                continue
-
-            networks_to_query.append((network_key, config, sync_tracker))
-
-        # 并行获取所有网络的 latest_block（带缓存）
-        if networks_to_query:
-            tasks = [
-                _fetch_latest_block(network_key, config.get("rpc_url", ""))
-                for network_key, config, _ in networks_to_query
-            ]
-            results = await asyncio.gather(*tasks)
-            latest_blocks = {k: v for k, v in results if v is not None}
-
-            # 构建网络状态列表
-            network_statuses: list[NetworkSyncStatus] = []
-            for network_key, config, sync_tracker in networks_to_query:
-                latest_block = latest_blocks.get(network_key)
-                if latest_block is None:
-                    continue
-
-                start_block = config.get("start_block", 0)
-                current_block = sync_tracker.last_block
-
-                total_blocks = latest_block - start_block
-                synced_blocks = current_block - start_block
-                sync_progress = min(100.0, (synced_blocks / total_blocks * 100) if total_blocks > 0 else 100.0)
-
-                status = NetworkSyncStatus(
-                    network_name=config["name"],
-                    network_key=network_key,
-                    current_block=current_block,
-                    latest_block=latest_block,
-                    sync_progress=round(sync_progress, 2),
-                    is_syncing=sync_tracker.status == SyncStatusEnum.RUNNING,
-                    last_synced_at=sync_tracker.last_synced_at.isoformat() if sync_tracker.last_synced_at else None
-                )
-                network_statuses.append(status)
-
-                # 保留 Sepolia 的向后兼容
-                if network_key == "sepolia":
-                    blockchain_sync = BlockchainSyncStatus(
-                        current_block=current_block,
-                        latest_block=latest_block,
-                        sync_progress=round(sync_progress, 2),
-                        is_syncing=sync_tracker.status == SyncStatusEnum.RUNNING,
-                        last_synced_at=sync_tracker.last_synced_at.isoformat() if sync_tracker.last_synced_at else None
-                    )
-
-            if network_statuses:
-                total_progress = sum(s.sync_progress for s in network_statuses)
-                overall_progress = total_progress / len(network_statuses)
-                is_any_syncing = any(s.is_syncing for s in network_statuses)
-
-                multi_network_sync = MultiNetworkSyncStatus(
-                    overall_progress=round(overall_progress, 2),
-                    is_syncing=is_any_syncing,
-                    networks=network_statuses
-                )
+        blockchain_sync, multi_network_sync = _build_sync_status(db)
     except Exception:
-        pass
+        blockchain_sync, multi_network_sync = None, None
 
-    response = StatsResponse(
+    return StatsResponse(
         total_agents=total_agents,
         active_agents=active_agents,
         total_networks=total_networks,
@@ -200,9 +109,79 @@ async def get_stats(db: Session = Depends(get_db)):
         blockchain_sync=blockchain_sync,
         multi_network_sync=multi_network_sync
     )
-    _stats_cache["cached_at"] = now
-    _stats_cache["value"] = response
-    return response
+
+
+def _count_rows(db: Session, model) -> int:
+    """Use a direct COUNT(id) aggregate instead of Query.count() subqueries."""
+    return int(db.query(func.count(model.id)).scalar() or 0)
+
+
+def _build_sync_status(
+    db: Session,
+) -> tuple[BlockchainSyncStatus | None, MultiNetworkSyncStatus | None]:
+    """Build sync status from persisted scheduler progress."""
+    enabled_networks = get_enabled_networks()
+    sync_map = {
+        s.network_name: s
+        for s in db.query(BlockchainSync).all()
+    }
+
+    network_statuses: list[NetworkSyncStatus] = []
+    blockchain_sync = None
+
+    for network_key, config in enabled_networks.items():
+        sync_tracker = sync_map.get(network_key)
+        if not sync_tracker:
+            continue
+
+        start_block = config.get("start_block", 0)
+        current_block = sync_tracker.last_block or start_block
+        latest_block = sync_tracker.current_block or current_block
+        latest_block = max(latest_block, current_block)
+
+        total_blocks = max(latest_block - start_block, 0)
+        synced_blocks = max(current_block - start_block, 0)
+        sync_progress = (
+            100.0
+            if total_blocks == 0
+            else min(100.0, synced_blocks / total_blocks * 100)
+        )
+
+        status = NetworkSyncStatus(
+            network_name=config["name"],
+            network_key=network_key,
+            current_block=current_block,
+            latest_block=latest_block,
+            sync_progress=round(sync_progress, 2),
+            is_syncing=sync_tracker.status == SyncStatusEnum.RUNNING,
+            last_synced_at=sync_tracker.last_synced_at.isoformat()
+            if sync_tracker.last_synced_at else None
+        )
+        network_statuses.append(status)
+
+        # 保留 Sepolia 的向后兼容
+        if network_key == "sepolia":
+            blockchain_sync = BlockchainSyncStatus(
+                current_block=current_block,
+                latest_block=latest_block,
+                sync_progress=round(sync_progress, 2),
+                is_syncing=sync_tracker.status == SyncStatusEnum.RUNNING,
+                last_synced_at=sync_tracker.last_synced_at.isoformat()
+                if sync_tracker.last_synced_at else None
+            )
+
+    if not network_statuses:
+        return blockchain_sync, None
+
+    total_progress = sum(s.sync_progress for s in network_statuses)
+    overall_progress = total_progress / len(network_statuses)
+    is_any_syncing = any(s.is_syncing for s in network_statuses)
+
+    return blockchain_sync, MultiNetworkSyncStatus(
+        overall_progress=round(overall_progress, 2),
+        is_syncing=is_any_syncing,
+        networks=network_statuses
+    )
 
 
 @router.get("/stats/registration-trend", response_model=RegistrationTrendResponse)

@@ -148,6 +148,10 @@ class NetworkSyncService:
 
             # Smart sync: skip if no new blocks
             if from_block > current_block:
+                sync_tracker.status = SyncStatusEnum.IDLE
+                sync_tracker.error_message = None
+                sync_tracker.last_synced_at = datetime.utcnow()
+                db.commit()
                 logger.info(
                     "sync_skipped",
                     network=self.network_key,

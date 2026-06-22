@@ -26,21 +26,45 @@ NETWORK_SYNC_INTERVALS = {
     "avalanche": 5, "celo": 5, "gnosis": 5, "taiko": 5, "megaeth": 5,
     "bsc-1": 5, "sepolia": 5,
 }
+DEFAULT_NETWORK_SYNC_INTERVAL_MINUTES = 5
+NETWORK_SYNC_STAGGER_SECONDS = 1
 
 
-def _create_network_sync_task(network_key: str):
-    """Factory function to create a sync task for a specific network"""
+def _create_multi_network_sync_task(network_keys: list[str]):
+    """Factory function to create one sequential sync task for all networks."""
     async def sync_task():
-        try:
-            logger.info("scheduler_task_started", task=f"{network_key}_sync")
-            await asyncio.to_thread(_sync_network_blocking, network_key)
-            logger.info("scheduler_task_completed", task=f"{network_key}_sync")
-        except Exception as e:
-            logger.error(
-                "scheduler_task_failed",
-                task=f"{network_key}_sync",
-                error=str(e)
-            )
+        started_at = datetime.now(timezone.utc)
+        failed_networks = []
+
+        logger.info("scheduler_task_started", task="multi_network_sync", networks=network_keys)
+
+        for index, network_key in enumerate(network_keys):
+            network = get_network(network_key) or {}
+            try:
+                logger.info(
+                    "network_sync_dispatch_started",
+                    network=network_key,
+                    name=network.get("name", network_key)
+                )
+                await asyncio.to_thread(_sync_network_blocking, network_key)
+                logger.info("network_sync_dispatch_completed", network=network_key)
+            except Exception as e:
+                failed_networks.append(network_key)
+                logger.error(
+                    "network_sync_dispatch_failed",
+                    network=network_key,
+                    error=str(e)
+                )
+
+            if index < len(network_keys) - 1:
+                await asyncio.sleep(NETWORK_SYNC_STAGGER_SECONDS)
+
+        logger.info(
+            "scheduler_task_completed",
+            task="multi_network_sync",
+            failed_networks=failed_networks,
+            duration_seconds=round((datetime.now(timezone.utc) - started_at).total_seconds(), 2)
+        )
     return sync_task
 
 
@@ -48,7 +72,6 @@ def start_scheduler():
     """Start the background task scheduler with multi-network support"""
 
     async def endpoint_scan_task():
-        """Daily endpoint health scan task"""
         try:
             logger.info("scheduler_task_started", task="endpoint_scan")
             await asyncio.to_thread(_run_endpoint_scan_blocking)
@@ -56,12 +79,12 @@ def start_scheduler():
         except Exception as e:
             logger.error("scheduler_task_failed", task="endpoint_scan", error=str(e))
 
-    # Dynamically add sync jobs for all enabled networks
+    _reset_interrupted_syncs()
+
     enabled_networks = get_enabled_networks()
     scheduled_networks = []
 
     for network_key, config in enabled_networks.items():
-        # Skip networks without RPC URL configured
         rpc_url = config.get("rpc_url", "")
         if not rpc_url:
             logger.warning(
@@ -71,28 +94,31 @@ def start_scheduler():
             )
             continue
 
-        # Get sync interval (default 5 minutes)
-        interval = NETWORK_SYNC_INTERVALS.get(network_key, 5)
-
-        # Create and add sync job
-        sync_task = _create_network_sync_task(network_key)
-        scheduler.add_job(
-            sync_task,
-            trigger=CronTrigger(minute=f'*/{interval}'),
-            id=f'{network_key}_sync',
-            name=f'Sync {config["name"]} blockchain data',
-            replace_existing=True,
-            max_instances=1
-        )
         scheduled_networks.append(network_key)
         logger.info(
-            "network_sync_scheduled",
+            "network_sync_enabled",
             network=network_key,
             name=config["name"],
-            interval_minutes=interval
+            interval_minutes=NETWORK_SYNC_INTERVALS.get(network_key, DEFAULT_NETWORK_SYNC_INTERVAL_MINUTES)
         )
 
-    # Add endpoint health scan job - runs daily at 03:00 UTC
+    if scheduled_networks:
+        interval = min(
+            NETWORK_SYNC_INTERVALS.get(network_key, DEFAULT_NETWORK_SYNC_INTERVAL_MINUTES)
+            for network_key in scheduled_networks
+        )
+        scheduler.add_job(
+            _create_multi_network_sync_task(scheduled_networks),
+            trigger=CronTrigger(minute=f'*/{interval}', second=0),
+            id='multi_network_sync',
+            name='Sync enabled blockchain networks sequentially',
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True,
+            misfire_grace_time=interval * 60,
+        )
+        logger.info("multi_network_sync_scheduled", networks=scheduled_networks, interval_minutes=interval)
+
     scheduler.add_job(
         endpoint_scan_task,
         trigger=CronTrigger(hour=ENDPOINT_SCAN_HOUR, minute=0),
@@ -102,10 +128,8 @@ def start_scheduler():
         max_instances=1
     )
 
-    # Start scheduler
     scheduler.start()
 
-    # Log summary
     endpoint_scan_job = scheduler.get_job('endpoint_scan')
     logger.info(
         "scheduler_started",
@@ -116,7 +140,6 @@ def start_scheduler():
         reputation_mode="EVENT-DRIVEN (via NewFeedback/FeedbackRevoked events)"
     )
 
-    # Check for unchecked agents on startup and trigger scan if needed
     _check_and_trigger_startup_scan()
 
 
@@ -139,7 +162,6 @@ def _check_and_trigger_startup_scan():
                 unchecked_agents=unchecked_count,
                 threshold=STARTUP_SCAN_THRESHOLD
             )
-            # Run scan in background thread to not block startup
             thread = threading.Thread(target=_run_endpoint_scan_blocking, daemon=True)
             thread.start()
         else:
@@ -151,6 +173,33 @@ def _check_and_trigger_startup_scan():
             )
     except Exception as e:
         logger.error("startup_scan_check_failed", error=str(e))
+
+
+def _reset_interrupted_syncs():
+    """Clear RUNNING sync flags left behind by a previous interrupted process."""
+    from src.db.database import SessionLocal
+    from src.models import BlockchainSync, SyncStatusEnum
+
+    db = None
+    try:
+        db = SessionLocal()
+        stale_syncs = db.query(BlockchainSync).filter(
+            BlockchainSync.status == SyncStatusEnum.RUNNING
+        ).all()
+        if not stale_syncs:
+            return
+
+        networks = [sync.network_name for sync in stale_syncs]
+        for sync in stale_syncs:
+            sync.status = SyncStatusEnum.ERROR
+            sync.error_message = "Reset on scheduler startup: previous sync did not finish"
+        db.commit()
+        logger.warning("interrupted_syncs_reset", count=len(stale_syncs), networks=networks)
+    except Exception as e:
+        logger.error("interrupted_syncs_reset_failed", error=str(e))
+    finally:
+        if db is not None:
+            db.close()
 
 
 def _sync_network_blocking(network_key: str):
@@ -177,7 +226,6 @@ def _run_endpoint_scan_blocking():
     try:
         db = SessionLocal()
         try:
-            # Get all unchecked agents
             agents = db.query(Agent).filter(
                 Agent.endpoint_checked_at.is_(None)
             ).all()
@@ -190,7 +238,6 @@ def _run_endpoint_scan_blocking():
 
             service = get_endpoint_health_service()
 
-            # Progress callback for logging
             async def log_progress(checked, total, working, agent_name, result):
                 if checked % 100 == 0:  # Log every 100 agents
                     logger.info(
@@ -200,13 +247,11 @@ def _run_endpoint_scan_blocking():
                         working=working,
                     )
 
-            # Run concurrent scan
             async def run_scan():
                 return await service.scan_agents_concurrent(agents, log_progress)
 
             result = loop.run_until_complete(run_scan())
 
-            # Save results to database
             for scan_result in result.get("results", []):
                 agent_id = scan_result.get("agent_id")
                 if agent_id:
