@@ -52,6 +52,7 @@ class Agent(Base):
 
     # Reputation data fields
     reputation_count = Column(Integer, nullable=False, default=0)  # Number of feedbacks
+    reputation_value_sum = Column(Float, nullable=False, default=0.0)
     reputation_last_updated = Column(DateTime, nullable=True)  # Last reputation sync time
 
     # OASF taxonomy fields (auto-classified from description if not in metadata)

@@ -171,6 +171,7 @@ class ReputationSyncService:
                 actual_value = average_value / (10 ** value_decimals) if value_decimals else average_value
                 agent.reputation_score = float(actual_value)
                 agent.reputation_count = int(count)
+                agent.reputation_value_sum = float(actual_value) * int(count)
                 agent.reputation_last_updated = datetime.utcnow()
 
                 db.commit()

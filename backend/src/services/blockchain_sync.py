@@ -21,6 +21,7 @@ from src.models import (
 from src.db.database import SessionLocal
 from src.services.metadata_service import metadata_service
 from src.services.metadata_processor import extract_oasf_data
+from src.services.reputation_aggregation import add_feedback_to_aggregate
 from src.utils.quality import compute_is_quality
 import structlog
 from eth_abi import decode
@@ -349,10 +350,8 @@ class NetworkSyncService:
                 count=len(logs)
             )
 
-            for i, log in enumerate(logs):
+            for log in logs:
                 await self._process_raw_feedback_log(db, log)
-                if i < len(logs) - 1:
-                    await asyncio.sleep(REQUEST_DELAY_SECONDS)
 
         except Exception as e:
             logger.warning(
@@ -848,8 +847,10 @@ class NetworkSyncService:
             db.add(feedback)
             db.flush()  # ensure feedback is visible for local aggregation
 
-            # Update agent reputation from local DB (zero RPC calls)
-            self._update_agent_reputation_local(db, agent)
+            # Update the persisted aggregate in O(1), regardless of history size.
+            self._update_agent_reputation_incremental(
+                db, agent, stored_value, value_decimals
+            )
 
             db.commit()
 
@@ -873,30 +874,17 @@ class NetworkSyncService:
                 log_tx="0x" + log.get("transactionHash", b"").hex() if log.get("transactionHash") else None
             )
 
-    def _update_agent_reputation_local(self, db: Session, agent: Agent):
-        """Update agent reputation from local feedback table — zero RPC calls.
-
-        Replaces on-chain getClients + getSummary. Since we already cache every
-        NewFeedback event in the Feedback table, we can compute the average locally.
-        This keeps the per-event cost constant regardless of ecosystem growth.
-        """
-        feedbacks = db.query(Feedback).filter(
-            Feedback.agent_id == agent.id,
-            Feedback.is_revoked == False
-        ).all()
-
-        count = len(feedbacks)
-        if count == 0:
-            return
-
-        # Normalize each value by its decimal places before averaging
-        total = sum(
-            float(f.value) / (10 ** f.value_decimals) if f.value_decimals else float(f.value)
-            for f in feedbacks
-        )
-        avg_value = total / count
-
+    def _apply_agent_reputation(
+        self,
+        db: Session,
+        agent: Agent,
+        value_sum: float,
+        count: int,
+        avg_value: float,
+    ):
+        """Persist an already-computed aggregate and emit material changes."""
         old_score = agent.reputation_score or 0.0
+        agent.reputation_value_sum = value_sum
         agent.reputation_score = avg_value
         agent.reputation_count = count
         agent.reputation_last_updated = datetime.utcnow()
@@ -915,6 +903,49 @@ class NetworkSyncService:
             token_id=agent.token_id,
             count=count,
             avg_value=round(avg_value, 4)
+        )
+
+    def _update_agent_reputation_incremental(
+        self,
+        db: Session,
+        agent: Agent,
+        value: int,
+        value_decimals: int,
+    ):
+        """Add one new feedback to the persisted aggregate in constant time."""
+        value_sum, count, avg_value = add_feedback_to_aggregate(
+            agent.reputation_value_sum or 0.0,
+            agent.reputation_count or 0,
+            value,
+            value_decimals,
+        )
+        self._apply_agent_reputation(db, agent, value_sum, count, avg_value)
+
+    def _rebuild_agent_reputation_local(self, db: Session, agent: Agent):
+        """Repair an aggregate using compact SQL groups instead of ORM rows."""
+        from sqlalchemy import func
+
+        groups = db.query(
+            Feedback.value_decimals,
+            func.count(Feedback.id),
+            func.sum(Feedback.value),
+        ).filter(
+            Feedback.agent_id == agent.id,
+            Feedback.is_revoked == False,
+        ).group_by(Feedback.value_decimals).all()
+
+        count = sum(group_count for _, group_count, _ in groups)
+        if count == 0:
+            self._apply_agent_reputation(db, agent, 0.0, 0, 0.0)
+            return
+
+        value_sum = sum(
+            float(group_sum) / (10 ** value_decimals)
+            if value_decimals else float(group_sum)
+            for value_decimals, _, group_sum in groups
+        )
+        self._apply_agent_reputation(
+            db, agent, value_sum, count, value_sum / count
         )
 
     async def _process_feedback_event(self, db: Session, event):
@@ -937,7 +968,7 @@ class NetworkSyncService:
 
         try:
             # Update reputation from local DB (zero RPC calls)
-            self._update_agent_reputation_local(db, agent)
+            self._rebuild_agent_reputation_local(db, agent)
             db.commit()
 
         except Exception as e:

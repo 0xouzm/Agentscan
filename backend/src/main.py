@@ -33,6 +33,7 @@ from src.db.migrate_multi_network import migrate as migrate_multi_network
 from src.db.migrate_network_ids import migrate as migrate_network_ids
 from src.db.migrate_add_endpoint_status import migrate as migrate_endpoint_status
 from src.db.migrate_feedback_value import migrate as migrate_feedback_value
+from src.db.migrate_reputation_aggregate import migrate as migrate_reputation_aggregate
 from src.db.migrate_tx_hash_prefix import migrate as migrate_tx_hash_prefix
 from src.db.migrate_add_gas_fields import migrate as migrate_gas_fields
 from src.db.migrate_remove_network_unique import migrate as migrate_remove_network_unique
@@ -55,6 +56,7 @@ try:
     migrate_network_ids()  # Fix orphaned network_id references
     migrate_endpoint_status()  # Add endpoint health check fields
     migrate_feedback_value()  # ERC-8004 mainnet: score → value/value_decimals
+    migrate_reputation_aggregate()  # Constant-time reputation updates
     migrate_tx_hash_prefix()  # Fix transaction_hash missing 0x prefix
     migrate_gas_fields()  # Add gas tracking fields to activities
     migrate_remove_network_unique()  # Allow multiple networks with same chain_id
