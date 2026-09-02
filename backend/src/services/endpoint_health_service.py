@@ -15,9 +15,9 @@ import httpx
 import structlog
 
 from src.db.database import SessionLocal
-from src.models import Agent, Network
-from src.services.subgraph_service import get_subgraph_service
-from src.services.onchain_feedback_service import get_onchain_feedback_service
+from sqlalchemy import desc
+
+from src.models import Agent, Feedback
 
 logger = structlog.get_logger(__name__)
 
@@ -123,9 +123,6 @@ class AgentEndpointReport:
 
 class EndpointHealthService:
     """Service for checking agent endpoint health"""
-
-    def __init__(self):
-        self.subgraph = get_subgraph_service()
 
     async def _fetch_metadata(self, uri: str) -> dict:
         """Fetch and parse metadata from URI"""
@@ -271,30 +268,37 @@ class EndpointHealthService:
     async def _get_recent_feedbacks(
         self, token_id: int, network_key: str, limit: int = 5
     ) -> list[dict]:
-        """Get recent feedbacks for an agent"""
+        """Get recent feedbacks from the local sync cache only.
+
+        Endpoint-health requests must never trigger historical chain scans. A
+        public request used to fall back to ``eth_getLogs`` from the network's
+        deployment block for every agent, which could continue after the HTTP
+        client disconnected and consume millions of RPC calls.
+        """
+        db = SessionLocal()
         try:
-            # Try subgraph first
-            if self.subgraph.is_network_supported(network_key):
-                result = await self.subgraph.get_agent_feedbacks(
-                    token_id=token_id, network=network_key, page=1, page_size=limit
+            feedbacks = (
+                db.query(Feedback)
+                .filter(
+                    Feedback.network_id == network_key,
+                    Feedback.token_id == token_id,
+                    Feedback.is_revoked == False,  # noqa: E712
                 )
-                return result.get("items", [])
-
-            # Fallback to on-chain
-            onchain_service = get_onchain_feedback_service()
-            result = await onchain_service.get_agent_feedbacks(
-                token_id=token_id, network_key=network_key, page=1, page_size=limit
+                .order_by(desc(Feedback.block_number))
+                .limit(limit)
+                .all()
             )
-            return result.get("items", [])
-
+            return [feedback.to_dict() for feedback in feedbacks]
         except Exception as e:
             logger.debug(
-                "feedback_fetch_failed",
+                "feedback_cache_fetch_failed",
                 token_id=token_id,
                 network_key=network_key,
                 error=str(e),
             )
             return []
+        finally:
+            db.close()
 
     async def check_agent_endpoints(
         self, agent: Agent, include_feedbacks: bool = True
@@ -377,11 +381,13 @@ class EndpointHealthService:
             db.close()
 
     async def generate_summary_report(
-        self, network_key: Optional[str] = None
+        self, network_key: Optional[str] = None, limit: int = 100
     ) -> dict:
-        """Generate a summary report of all agent endpoints"""
+        """Generate a bounded live summary without any chain fallback."""
         reports = await self.check_all_agents(
-            network_key=network_key, include_feedbacks=True
+            network_key=network_key,
+            include_feedbacks=False,
+            limit=limit,
         )
 
         total_agents = len(reports)

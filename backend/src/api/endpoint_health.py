@@ -7,6 +7,7 @@ from datetime import datetime
 from fastapi import APIRouter, Query, HTTPException, Depends
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
+from sqlalchemy import desc, func
 import structlog
 import json
 import asyncio
@@ -35,6 +36,98 @@ _scan_state = {
     "started_at": None,
     "network": None,
 }
+
+
+def _cached_report(agent: Agent) -> dict:
+    """Serialize the latest stored endpoint scan without external I/O."""
+    status = agent.endpoint_status if isinstance(agent.endpoint_status, dict) else {}
+    endpoints = status.get("endpoints", [])
+    if not isinstance(endpoints, list):
+        endpoints = []
+
+    return {
+        "agent_id": agent.id,
+        "agent_name": agent.name,
+        "token_id": agent.token_id,
+        "network_key": agent.network_id,
+        "metadata_uri": agent.metadata_uri,
+        "has_working_endpoints": bool(status.get("has_working_endpoints", False)),
+        "total_endpoints": int(status.get("total_endpoints", len(endpoints)) or 0),
+        "healthy_endpoints": int(status.get("healthy_endpoints", 0) or 0),
+        "endpoints": endpoints,
+        "recent_feedbacks": [],
+        "reputation_score": float(agent.reputation_score or 0),
+        "reputation_count": int(agent.reputation_count or 0),
+    }
+
+
+def _query_cached_reports(
+    db: Session,
+    network: str | None,
+    limit: int,
+    *,
+    working_only: bool = False,
+    min_reputation: int = 0,
+) -> list[dict]:
+    """Return a bounded set of cached endpoint reports."""
+    query = db.query(Agent).filter(Agent.endpoint_status.isnot(None))
+    if network:
+        query = query.filter(Agent.network_id == network)
+    if working_only:
+        query = query.filter(
+            func.json_extract(Agent.endpoint_status, "$.has_working_endpoints") == 1
+        )
+    if min_reputation > 0:
+        query = query.filter(Agent.reputation_count >= min_reputation)
+
+    agents = (
+        query.order_by(
+            desc(Agent.reputation_count),
+            desc(Agent.reputation_score),
+            desc(Agent.endpoint_checked_at),
+        )
+        .limit(limit)
+        .all()
+    )
+    return [_cached_report(agent) for agent in agents]
+
+
+def _count_cached_working(
+    db: Session, network: str | None, min_reputation: int
+) -> int:
+    query = db.query(func.count(Agent.id)).filter(
+        Agent.endpoint_status.isnot(None),
+        func.json_extract(Agent.endpoint_status, "$.has_working_endpoints") == 1,
+    )
+    if network:
+        query = query.filter(Agent.network_id == network)
+    if min_reputation > 0:
+        query = query.filter(Agent.reputation_count >= min_reputation)
+    return int(query.scalar() or 0)
+
+
+def _summarize_reports(reports: list[dict]) -> dict:
+    total_endpoints = sum(report["total_endpoints"] for report in reports)
+    healthy_endpoints = sum(report["healthy_endpoints"] for report in reports)
+    return {
+        "total_agents": len(reports),
+        "agents_with_endpoints": sum(
+            1 for report in reports if report["total_endpoints"] > 0
+        ),
+        "agents_with_working_endpoints": sum(
+            1 for report in reports if report["has_working_endpoints"]
+        ),
+        "agents_with_feedbacks": sum(
+            1 for report in reports if report["reputation_count"] > 0
+        ),
+        "total_endpoints": total_endpoints,
+        "healthy_endpoints": healthy_endpoints,
+        "endpoint_health_rate": (
+            round(healthy_endpoints / total_endpoints * 100, 1)
+            if total_endpoints > 0
+            else 0
+        ),
+    }
 
 
 @router.get("/endpoint-health/scan-status")
@@ -272,43 +365,14 @@ async def get_quick_stats(
 async def get_endpoint_health_summary(
     network: str = Query(None, description="Filter by network key (e.g., 'sepolia')"),
     limit: int = Query(20, ge=1, le=100, description="Limit agents to check"),
+    db: Session = Depends(get_db),
 ):
-    """
-    Get summary report of endpoint health across agents.
-
-    WARNING: This endpoint performs real-time HTTP checks and can be slow.
-    Use /endpoint-health/quick-stats for fast database-only statistics.
-    Use /endpoint-health/stream for real-time streaming results.
-    """
-    service = get_endpoint_health_service()
-
-    # Only check limited number of agents for faster response
-    reports = await service.check_all_agents(
-        network_key=network,
-        only_with_endpoints=False,
-        include_feedbacks=True,
-        limit=limit,
-    )
-
-    working = [r for r in reports if r.has_working_endpoints]
-    total_endpoints = sum(r.total_endpoints for r in reports)
-    healthy_endpoints = sum(r.healthy_endpoints for r in reports)
-
+    """Get a bounded endpoint-health summary from the latest stored scan."""
+    reports = _query_cached_reports(db, network, limit)
+    working = [report for report in reports if report["has_working_endpoints"]]
     result = {
-        "summary": {
-            "total_agents": len(reports),
-            "agents_with_endpoints": sum(1 for r in reports if r.total_endpoints > 0),
-            "agents_with_working_endpoints": len(working),
-            "agents_with_feedbacks": sum(1 for r in reports if r.reputation_count > 0),
-            "total_endpoints": total_endpoints,
-            "healthy_endpoints": healthy_endpoints,
-            "endpoint_health_rate": (
-                round(healthy_endpoints / total_endpoints * 100, 1)
-                if total_endpoints > 0
-                else 0
-            ),
-        },
-        "working_agents": [r.to_dict() for r in working[:20]],
+        "summary": _summarize_reports(reports),
+        "working_agents": working[:20],
         "generated_at": datetime.utcnow().isoformat(),
     }
 
@@ -325,22 +389,18 @@ async def get_endpoint_health_summary(
 )
 async def get_full_endpoint_health_report(
     network: str = Query(None, description="Filter by network key"),
-    limit: int = Query(None, ge=1, le=500, description="Limit number of agents"),
+    limit: int = Query(100, ge=1, le=500, description="Limit number of agents"),
+    db: Session = Depends(get_db),
 ):
-    """
-    Get full endpoint health report for all agents.
-
-    Warning: This endpoint may be slow for large numbers of agents.
-    Use the summary endpoint for quick overview.
-    """
-    service = get_endpoint_health_service()
-    result = await service.generate_summary_report(network_key=network)
+    """Get a bounded endpoint-health report from the latest stored scan."""
+    reports = _query_cached_reports(db, network, limit)
+    working = [report for report in reports if report["has_working_endpoints"]]
 
     return EndpointHealthFullResponse(
-        summary=result["summary"],
-        working_agents=result["working_agents"],
-        all_reports=result["all_reports"][:limit] if limit else result["all_reports"],
-        generated_at=result["generated_at"],
+        summary=_summarize_reports(reports),
+        working_agents=working[:20],
+        all_reports=reports,
+        generated_at=datetime.utcnow().isoformat(),
     )
 
 
@@ -502,25 +562,22 @@ async def get_working_agents(
     network: str = Query(None, description="Filter by network key"),
     min_reputation: int = Query(0, ge=0, description="Minimum reputation count"),
     limit: int = Query(20, ge=1, le=100, description="Maximum agents to return"),
+    db: Session = Depends(get_db),
 ):
     """
     Get agents with working endpoints, sorted by activity.
 
-    Quick endpoint to find active, reachable agents.
+    Quick database-only endpoint to find active, reachable agents.
     """
-    service = get_endpoint_health_service()
-    reports = await service.check_all_agents(
-        network_key=network, only_with_endpoints=True, include_feedbacks=True
+    working = _query_cached_reports(
+        db,
+        network,
+        limit,
+        working_only=True,
+        min_reputation=min_reputation,
     )
 
-    # Filter and sort
-    working = [r for r in reports if r.has_working_endpoints]
-    if min_reputation > 0:
-        working = [r for r in working if r.reputation_count >= min_reputation]
-
-    working.sort(key=lambda x: (-x.reputation_count, -x.reputation_score))
-
     return {
-        "total_working": len(working),
-        "agents": [r.to_dict() for r in working[:limit]],
+        "total_working": _count_cached_working(db, network, min_reputation),
+        "agents": working,
     }

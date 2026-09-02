@@ -10,8 +10,8 @@ export default function EndpointHealthApiPage() {
     <div>
       <h1 className="text-3xl font-bold text-[#0a0a0a] dark:text-[#fafafa] mb-4">Endpoint Health API</h1>
       <p className="text-[#525252] dark:text-[#a1a1a6] mb-8">
-        Monitor the health and availability of AI agent endpoints. These endpoints provide live health checks,
-        response times, and platform-wide health statistics.
+        Monitor the health and availability of AI agent endpoints. Single-agent checks run live; aggregate
+        endpoints return the latest stored scan so requests stay fast and bounded.
       </p>
 
       <EndpointBlock
@@ -61,7 +61,7 @@ export default function EndpointHealthApiPage() {
       <EndpointBlock
         method="GET"
         path="/api/endpoint-health/summary"
-        description="Endpoint health summary with working agent list."
+        description="Cached endpoint health summary with a bounded working-agent list."
         params={[
           { name: 'network', type: 'string', description: 'Filter by network' },
           { name: 'limit', type: 'integer', default: '20', description: 'Max working agents to return (max 100)' },
@@ -88,7 +88,7 @@ export default function EndpointHealthApiPage() {
       <EndpointBlock
         method="GET"
         path="/api/endpoint-health/working-agents"
-        description="List agents with working endpoints, optionally filtered by minimum reputation."
+        description="List agents with working endpoints from the latest stored scan, optionally filtered by minimum reputation."
         params={[
           { name: 'network', type: 'string', description: 'Filter by network' },
           { name: 'min_reputation', type: 'integer', default: '0', description: 'Minimum reputation score' },
@@ -111,10 +111,10 @@ export default function EndpointHealthApiPage() {
       <EndpointBlock
         method="GET"
         path="/api/endpoint-health/full-report"
-        description="Full endpoint health report for all agents (large response)."
+        description="Bounded endpoint health report from the latest stored scan."
         params={[
           { name: 'network', type: 'string', description: 'Filter by network' },
-          { name: 'limit', type: 'integer', description: 'Max agents (max 500)' },
+          { name: 'limit', type: 'integer', default: '100', description: 'Max agents (max 500)' },
         ]}
         response={`{
   "summary": { ... },

@@ -175,7 +175,7 @@ export const endpointHealthService = {
       `/agents/${agentId}/endpoint-health?include_feedbacks=${includeFeedbacks}`
     ),
 
-  // 获取 Endpoint 健康状态摘要 (real-time HTTP checks, slow)
+  // 获取最近一次扫描缓存中的 Endpoint 健康状态摘要
   getSummary: (network?: string) => {
     const query = network ? `?network=${network}` : '';
     return apiGet<EndpointHealthSummaryResponse>(`/endpoint-health/summary${query}`);
